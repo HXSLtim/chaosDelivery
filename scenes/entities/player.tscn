@@ -1,0 +1,31 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://src/entities/player.gd" id="1_ply"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_body"]
+radius = 0.35
+height = 1.2
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_visual"]
+radius = 0.32
+height = 1.2
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_player"]
+albedo_color = Color(0.301961, 0.564706, 0.913725, 1)
+roughness = 0.72
+
+[node name="Player" type="CharacterBody3D"]
+script = ExtResource("1_ply")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("CapsuleShape3D_body")
+
+[node name="VisualRoot" type="MeshInstance3D" parent="."]
+mesh = SubResource("CapsuleMesh_visual")
+surface_material_override/0 = SubResource("StandardMaterial3D_player")
+
+[node name="CameraMount" type="Marker3D" parent="."]
+position = Vector3(0, 1.6, -2.8)
+
+[node name="HoldAnchor" type="Marker3D" parent="."]
+position = Vector3(0, 1, 0.75)

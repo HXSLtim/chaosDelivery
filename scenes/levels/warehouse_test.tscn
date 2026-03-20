@@ -1,0 +1,100 @@
+[gd_scene load_steps=8 format=3]
+
+[ext_resource type="Script" path="res://src/network/warehouse_session.gd" id="1_session"]
+[ext_resource type="PackedScene" path="res://scenes/entities/player.tscn" id="1_player"]
+[ext_resource type="PackedScene" path="res://scenes/entities/package.tscn" id="2_package"]
+[ext_resource type="Script" path="res://src/systems/order_manager.gd" id="4_order_manager"]
+[ext_resource type="PackedScene" path="res://scenes/entities/delivery_zone.tscn" id="5_delivery_zone"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_floor"]
+albedo_color = Color(0.454902, 0.419608, 0.34902, 1)
+roughness = 0.98
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_floor"]
+material = SubResource("StandardMaterial3D_floor")
+size = Vector2(24, 24)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_floor"]
+size = Vector3(24, 0.5, 24)
+
+[sub_resource type="Environment" id="Environment_default"]
+background_mode = 1
+background_color = Color(0.733333, 0.823529, 0.921569, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.862745, 0.905882, 0.94902, 1)
+ambient_light_energy = 0.18
+ssao_enabled = true
+ssao_radius = 1.2
+ssao_intensity = 1.5
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_wall"]
+albedo_color = Color(0.815686, 0.784314, 0.721569, 1)
+roughness = 1.0
+
+[sub_resource type="BoxMesh" id="BoxMesh_backdrop"]
+material = SubResource("StandardMaterial3D_wall")
+size = Vector3(16, 5, 0.4)
+
+[node name="WarehouseTest" type="Node3D"]
+script = ExtResource("1_session")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_default")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.819152, -0.573576, 0, 0.242404, 0.346189, -0.906308, 0.519837, 0.742404, 0.422618, 0, 8, 0)
+light_color = Color(1, 0.956863, 0.878431, 1)
+light_energy = 2.6
+shadow_enabled = true
+directional_shadow_mode = 2
+directional_shadow_max_distance = 50.0
+
+[node name="FillLight" type="OmniLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -4, 4, 5)
+light_color = Color(0.690196, 0.815686, 1, 1)
+light_energy = 0.9
+omni_range = 18.0
+
+[node name="PackageKeyLight" type="SpotLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 2, 5.5, 0)
+light_color = Color(1, 0.85098, 0.713726, 1)
+light_energy = 1.7
+spot_range = 16.0
+spot_angle = 38.0
+shadow_enabled = true
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.913545, 0.406737, 0, -0.406737, 0.913545, 0, 14, 12)
+current = true
+
+[node name="Floor" type="StaticBody3D" parent="."]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Floor"]
+shape = SubResource("BoxShape3D_floor")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Floor"]
+mesh = SubResource("PlaneMesh_floor")
+
+[node name="BackdropWall" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.5, -5.5)
+mesh = SubResource("BoxMesh_backdrop")
+
+[node name="SpawnPoints" type="Node3D" parent="."]
+
+[node name="PlayerSpawn" type="Marker3D" parent="SpawnPoints"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3, 1, 0)
+
+[node name="PackageSpawn" type="Marker3D" parent="SpawnPoints"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 1, 0)
+
+[node name="Players" type="Node3D" parent="."]
+
+[node name="Packages" type="Node3D" parent="."]
+
+[node name="Gameplay" type="Node" parent="."]
+
+[node name="OrderManager" type="Node" parent="Gameplay"]
+script = ExtResource("4_order_manager")
+
+[node name="DeliveryZone" parent="Gameplay" instance=ExtResource("5_delivery_zone")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 7, 0, 0)

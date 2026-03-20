@@ -1,0 +1,10 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/levels/warehouse_test.tscn" id="1_level"]
+[ext_resource type="PackedScene" path="res://scenes/ui/hud.tscn" id="2_hud"]
+
+[node name="Main" type="Node"]
+
+[node name="World" parent="." instance=ExtResource("1_level")]
+
+[node name="HUD" parent="." instance=ExtResource("2_hud")]

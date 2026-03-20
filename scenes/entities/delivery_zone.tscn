@@ -1,0 +1,26 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://src/entities/delivery_zone.gd" id="1_zone_script"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_zone"]
+top_radius = 1.25
+bottom_radius = 1.25
+height = 0.06
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_zone"]
+radius = 1.25
+height = 1.2
+
+[node name="DeliveryZone" type="Area3D"]
+script = ExtResource("1_zone_script")
+monitoring = true
+monitorable = true
+collision_layer = 16
+collision_mask = 1
+
+[node name="MarkerMesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("CylinderMesh_zone")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("CylinderShape3D_zone")
+position = Vector3(0, 0.6, 0)

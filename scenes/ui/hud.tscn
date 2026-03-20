@@ -1,0 +1,42 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/ui/hud.gd" id="1_hud"]
+
+[node name="HUD" type="CanvasLayer"]
+script = ExtResource("1_hud")
+
+[node name="Panel" type="PanelContainer" parent="."]
+offset_left = 12.0
+offset_top = 12.0
+offset_right = 460.0
+offset_bottom = 236.0
+
+[node name="Content" type="VBoxContainer" parent="Panel"]
+theme_override_constants/separation = 4
+
+[node name="TitleLabel" type="Label" parent="Panel/Content"]
+text = "Chaos Delivery Prototype"
+
+[node name="PlayerLabel" type="Label" parent="Panel/Content"]
+text = "Player: N/A"
+
+[node name="PhaseLabel" type="Label" parent="Panel/Content"]
+text = "Phase: N/A"
+
+[node name="GoldLabel" type="Label" parent="Panel/Content"]
+text = "Gold: N/A"
+
+[node name="NetworkLabel" type="Label" parent="Panel/Content"]
+text = "Network: Offline"
+
+[node name="OrdersLabel" type="Label" parent="Panel/Content"]
+text = "Orders: Pending N/A  Completed N/A  Failed N/A"
+
+[node name="ControlsLabel" type="Label" parent="Panel/Content"]
+text = "Controls: WASD Move  E Grab/Drop  F Throw"
+
+[node name="NetworkControlsLabel" type="Label" parent="Panel/Content"]
+text = "Network: F5 Host LAN  F6 Join localhost  F7 Leave"
+
+[node name="HintLabel" type="Label" parent="Panel/Content"]
+text = "Hint: Open two game windows to test LAN locally."
