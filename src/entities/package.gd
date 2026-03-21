@@ -31,16 +31,43 @@ func _ready() -> void:
 	grabbable_component.grab_ended.connect(_on_grab_ended)
 
 
+func _process(_delta: float) -> void:
+	_recover_stale_holder()
+
+
+func _physics_process(_delta: float) -> void:
+	_recover_stale_holder()
+
+
+func _recover_stale_holder() -> void:
+	if grabbable_component == null:
+		return
+
+	# Defensive recovery for stale runtime state after disconnects or duplicate RPCs.
+	var holder_invalid := holder == null or not is_instance_valid(holder) or not holder.is_inside_tree()
+	if current_state == State.HELD and holder_invalid:
+		grabbable_component.force_clear_holder(Vector3.ZERO, get_owner_peer_id_hint())
+		freeze = false
+		holder = null
+		_change_state(State.ON_GROUND)
+
+
 func request_grab(by: Node3D, requester_peer_id: int = 0) -> bool:
 	if grabbable_component == null:
 		return false
+	if holder == by and by != null:
+		return true
 	return grabbable_component.try_grab(by, requester_peer_id)
 
 
 func request_drop(impulse: Vector3 = Vector3.ZERO) -> bool:
 	if grabbable_component == null:
 		return false
-	return grabbable_component.try_drop(impulse)
+	var dropped := bool(grabbable_component.try_drop(impulse))
+	if dropped:
+		return true
+	# Idempotent path: package already in released state should not be treated as failure.
+	return holder == null and not freeze
 
 
 func can_accept_grab_request(by: Node3D, requester_peer_id: int = 0, max_distance: float = -1.0) -> bool:
@@ -150,8 +177,14 @@ func apply_network_snapshot(snapshot: Dictionary) -> void:
 			var holder_node := get_node_or_null(NodePath(holder_path_text)) as Node3D
 			if holder_node != null:
 				grabbable_component.force_set_holder(holder_node, get_owner_peer_id_hint())
-		elif holder != null:
+			else:
+				# Invalid holder path in snapshot: force a clean release state.
+				grabbable_component.force_clear_holder(Vector3.ZERO, get_owner_peer_id_hint())
+				target_state = int(State.ON_GROUND)
+		else:
 			grabbable_component.force_clear_holder(Vector3.ZERO, get_owner_peer_id_hint())
+			if target_state == int(State.HELD):
+				target_state = int(State.ON_GROUND)
 
 	if target_state >= int(State.ON_GROUND) and target_state <= int(State.THROWN):
 		_change_state(target_state as State)

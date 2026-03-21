@@ -12,19 +12,39 @@ var holder: Node3D = null
 
 var _package: RigidBody3D
 var _original_parent: Node = null
+var _hold_target: Node3D = null
 
 
 func _ready() -> void:
 	_package = get_parent() as RigidBody3D
 	if _package == null:
 		push_warning("GrabbableComponent must be a direct child of Package.")
+		return
+	_original_parent = _package.get_parent()
+
+
+func _physics_process(_delta: float) -> void:
+	if _package == null:
+		return
+	if not _has_valid_holder():
+		return
+	if _hold_target == null or not is_instance_valid(_hold_target):
+		_hold_target = _resolve_attach_target(holder)
+	if _hold_target == null:
+		return
+
+	# Keep the package in its authoritative parent branch and only follow transform.
+	_package.global_position = _hold_target.global_position
+	_package.global_rotation = _hold_target.global_rotation
 
 
 func can_grab(by: Node3D, requester_peer_id: int = 0, max_distance: float = -1.0) -> bool:
 	if _package == null or by == null:
 		return false
-	if holder != null:
-		return false
+	_recover_if_holder_stale()
+	if _has_valid_holder():
+		# Idempotent path: same holder re-requesting grab is treated as valid.
+		return holder == by
 	if max_distance > 0.0 and _package.global_position.distance_to(by.global_position) > max_distance:
 		return false
 	if requester_peer_id < 0:
@@ -33,7 +53,10 @@ func can_grab(by: Node3D, requester_peer_id: int = 0, max_distance: float = -1.0
 
 
 func can_drop() -> bool:
-	return _package != null and holder != null
+	if _package == null:
+		return false
+	_recover_if_holder_stale()
+	return _has_valid_holder() or _package.freeze
 
 
 func get_owner_peer_id() -> int:
@@ -45,7 +68,7 @@ func get_holder_node() -> Node3D:
 
 
 func get_holder_path() -> NodePath:
-	if holder == null:
+	if not _has_valid_holder():
 		return NodePath("")
 	return holder.get_path()
 
@@ -59,7 +82,8 @@ func try_grab(by: Node3D, requester_peer_id: int = 0) -> bool:
 
 func try_drop(impulse: Vector3 = Vector3.ZERO) -> bool:
 	if not can_drop():
-		return false
+		# Idempotent path: already-released package should not fail repeated drop requests.
+		return holder == null and _package != null and not _package.freeze
 
 	return force_clear_holder(impulse)
 
@@ -67,10 +91,25 @@ func try_drop(impulse: Vector3 = Vector3.ZERO) -> bool:
 func force_set_holder(by: Node3D, new_owner_peer_id: int = 0) -> bool:
 	if _package == null or by == null:
 		return false
+	_recover_if_holder_stale()
+	if _has_valid_holder() and holder == by:
+		owner_peer_id = new_owner_peer_id if new_owner_peer_id > 0 else owner_peer_id
+		_package.freeze = true
+		_package.linear_velocity = Vector3.ZERO
+		_package.angular_velocity = Vector3.ZERO
+		_hold_target = _resolve_attach_target(by)
+		_attach_to_holder(by)
+		return true
+	if _has_valid_holder() and holder != by:
+		force_clear_holder(Vector3.ZERO)
 
-	_original_parent = _package.get_parent()
+	if _original_parent == null or not is_instance_valid(_original_parent):
+		_original_parent = _package.get_parent()
+	elif _package.get_parent() != _original_parent:
+		_package.reparent(_original_parent, true)
 	holder = by
 	owner_peer_id = new_owner_peer_id if new_owner_peer_id > 0 else fallback_owner_peer_id
+	_hold_target = _resolve_attach_target(by)
 
 	# Local prototype behavior: freeze physics and attach under the holder anchor.
 	_package.freeze = true
@@ -85,13 +124,11 @@ func force_set_holder(by: Node3D, new_owner_peer_id: int = 0) -> bool:
 func force_clear_holder(impulse: Vector3 = Vector3.ZERO, owner_peer_id_override: int = -1) -> bool:
 	if _package == null:
 		return false
-	if holder == null:
-		if owner_peer_id_override > 0:
-			owner_peer_id = owner_peer_id_override
-		return false
+	var had_holder_ref := holder != null
+	var had_freeze := _package.freeze
 
 	var drop_parent := _resolve_drop_parent()
-	if drop_parent != null:
+	if drop_parent != null and _package.get_parent() != drop_parent:
 		_package.reparent(drop_parent, true)
 
 	_package.freeze = false
@@ -99,18 +136,24 @@ func force_clear_holder(impulse: Vector3 = Vector3.ZERO, owner_peer_id_override:
 		_package.apply_central_impulse(impulse)
 
 	holder = null
+	_hold_target = null
 	owner_peer_id = owner_peer_id_override if owner_peer_id_override > 0 else fallback_owner_peer_id
-	grab_ended.emit(impulse, owner_peer_id)
+	if had_holder_ref or had_freeze or impulse.length_squared() > 0.0001:
+		grab_ended.emit(impulse, owner_peer_id)
 	return true
 
 
 func _attach_to_holder(by: Node3D) -> void:
-	var attach_target := _resolve_attach_target(by)
-	if attach_target == null:
+	if _hold_target == null:
+		_hold_target = _resolve_attach_target(by)
+	if _hold_target == null:
 		return
-	_package.reparent(attach_target, true)
-	_package.global_position = attach_target.global_position
-	_package.global_rotation = attach_target.global_rotation
+	if _original_parent == null or not is_instance_valid(_original_parent):
+		_original_parent = _package.get_parent()
+	elif _package.get_parent() != _original_parent:
+		_package.reparent(_original_parent, true)
+	_package.global_position = _hold_target.global_position
+	_package.global_rotation = _hold_target.global_rotation
 
 
 func _resolve_attach_target(by: Node3D) -> Node3D:
@@ -135,3 +178,17 @@ func _resolve_drop_parent() -> Node:
 		return tree.current_scene
 
 	return _package.get_tree().root if _package != null else null
+
+
+func _has_valid_holder() -> bool:
+	return holder != null and is_instance_valid(holder) and holder.is_inside_tree()
+
+
+func _recover_if_holder_stale() -> void:
+	if holder == null:
+		return
+	if _has_valid_holder():
+		return
+	# Stale holder reference can happen after disconnect/free. Force a clean release so
+	# package-level listeners clear their own holder state too.
+	force_clear_holder(Vector3.ZERO)

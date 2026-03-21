@@ -21,7 +21,9 @@ func create_order(package_type: String = "normal", destination: String = "A") ->
 		"is_completed": false
 	}
 	active_orders.append(order)
-	EventBus.order_added.emit(order_id)
+	var event_bus := _get_event_bus()
+	if event_bus != null:
+		event_bus.order_added.emit(order_id)
 	return order_id
 
 func complete_order(order_id: String) -> bool:
@@ -33,7 +35,9 @@ func complete_order(order_id: String) -> bool:
 			return false
 		order["is_completed"] = true
 		active_orders[i] = order
-		EventBus.order_completed.emit(order_id)
+		var event_bus := _get_event_bus()
+		if event_bus != null:
+			event_bus.order_completed.emit(order_id)
 		return true
 	return false
 
@@ -54,7 +58,9 @@ func ensure_static_order(package_type: String = "normal", destination: String = 
 		"is_completed": false
 	}
 	active_orders.append(order)
-	EventBus.order_added.emit(DEFAULT_STATIC_ORDER_ID)
+	var event_bus := _get_event_bus()
+	if event_bus != null:
+		event_bus.order_added.emit(DEFAULT_STATIC_ORDER_ID)
 	return DEFAULT_STATIC_ORDER_ID
 
 
@@ -129,3 +135,7 @@ func _extract_package_type(package_node: Node) -> String:
 		if type_value != null and String(type_value) != "":
 			return String(type_value)
 	return "normal"
+
+
+func _get_event_bus() -> Node:
+	return get_node_or_null("/root/EventBus")

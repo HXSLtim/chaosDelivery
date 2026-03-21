@@ -6,13 +6,32 @@ extends CharacterBody3D
 @export var gravity_scale: float = 1.0
 @export var grab_range: float = 2.0
 @export var throw_impulse_strength: float = 4.5
+@export var interaction_cooldown: float = 0.12
+@export var network_request_timeout: float = 0.35
+@export var expected_player_count: int = 2
+
+const LOCAL_COLOR := Color(0.329, 0.851, 0.557, 1.0)
+const REMOTE_COLOR := Color(0.847, 0.482, 0.443, 1.0)
+const WAITING_COLOR := Color(0.980, 0.792, 0.278, 1.0)
+const COOLDOWN_COLOR := Color(0.627, 0.667, 0.980, 1.0)
 
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 var _last_input: Vector2 = Vector2.ZERO
 var _held_package = null
+var _interaction_cooldown_left: float = 0.0
+var _request_timeout_left: float = 0.0
+var _waiting_for_network_action: bool = false
+var _last_holding_state: bool = false
+var _last_identity_cache: String = ""
+var _debug_material: StandardMaterial3D = null
+
+@onready var _visual_root: MeshInstance3D = $VisualRoot
+@onready var _debug_label: Label3D = $DebugLabel
 
 
 func _physics_process(delta: float) -> void:
+	_tick_runtime_state(delta)
+
 	if multiplayer.multiplayer_peer != null and not is_multiplayer_authority():
 		return
 
@@ -34,6 +53,10 @@ func _physics_process(delta: float) -> void:
 	_update_facing(delta)
 	_handle_interactions()
 	_broadcast_state()
+
+
+func _ready() -> void:
+	add_to_group("players")
 
 
 func _read_move_input() -> Vector2:
@@ -64,26 +87,40 @@ func _update_facing(delta: float) -> void:
 func _handle_interactions() -> void:
 	_held_package = _find_held_package_for_self()
 	var session := _get_session()
+	if not _can_attempt_interaction():
+		return
 
 	if InputManager.is_grab_pressed():
 		if _held_package != null:
 			if session != null and session.has_method("request_player_drop"):
 				if session.request_player_drop(self):
 					_held_package = null
+					_mark_network_request_sent()
+				else:
+					_start_cooldown()
 			else:
 				_drop_package()
+				_start_cooldown()
 		else:
 			if session != null and session.has_method("request_player_grab"):
-				session.request_player_grab(self)
+				if session.request_player_grab(self):
+					_mark_network_request_sent()
+				else:
+					_start_cooldown()
 			else:
 				_try_grab_nearest_package()
+				_start_cooldown()
 
 	if _held_package != null and InputManager.is_throw_pressed():
 		if session != null and session.has_method("request_player_throw"):
 			if session.request_player_throw(self, -basis.z.normalized() * throw_impulse_strength):
 				_held_package = null
+				_mark_network_request_sent()
+			else:
+				_start_cooldown()
 		else:
 			_throw_package()
+			_start_cooldown()
 
 
 func _try_grab_nearest_package() -> void:
@@ -155,3 +192,97 @@ func _sync_remote_state(new_position: Vector3, new_basis: Basis, new_velocity: V
 	global_position = new_position
 	basis = new_basis
 	velocity = new_velocity
+
+
+func _tick_runtime_state(delta: float) -> void:
+	_update_identity_visuals()
+
+	_interaction_cooldown_left = max(0.0, _interaction_cooldown_left - delta)
+	if _waiting_for_network_action:
+		_request_timeout_left = max(0.0, _request_timeout_left - delta)
+
+	var is_holding_now := _find_held_package_for_self() != null
+	if is_holding_now != _last_holding_state:
+		_waiting_for_network_action = false
+		_request_timeout_left = 0.0
+	_last_holding_state = is_holding_now
+
+	if _waiting_for_network_action and is_zero_approx(_request_timeout_left):
+		_waiting_for_network_action = false
+
+	_update_runtime_status_label()
+
+
+func _can_attempt_interaction() -> bool:
+	if _interaction_cooldown_left > 0.0:
+		return false
+	if _waiting_for_network_action:
+		return false
+	return true
+
+
+func _start_cooldown() -> void:
+	_interaction_cooldown_left = interaction_cooldown
+
+
+func _mark_network_request_sent() -> void:
+	_start_cooldown()
+	_waiting_for_network_action = true
+	_request_timeout_left = network_request_timeout
+
+
+func _update_identity_visuals() -> void:
+	var local_role := is_multiplayer_authority()
+	var peer_id := get_multiplayer_authority()
+	var identity := "%s:%d" % ["LOCAL" if local_role else "REMOTE", peer_id]
+	if identity == _last_identity_cache:
+		return
+	_last_identity_cache = identity
+
+	var tint := LOCAL_COLOR if local_role else REMOTE_COLOR
+	_debug_label.text = "P%d %s" % [peer_id, "LOCAL" if local_role else "REMOTE"]
+
+	if _debug_material == null:
+		var source_material := _visual_root.get_active_material(0)
+		if source_material is StandardMaterial3D:
+			_debug_material = source_material.duplicate()
+			_visual_root.set_surface_override_material(0, _debug_material)
+
+	if _debug_material != null:
+		_debug_material.albedo_color = tint
+		_debug_material.emission_enabled = true
+		_debug_material.emission = tint * 0.35
+
+
+func _update_runtime_status_label() -> void:
+	var local_role := is_multiplayer_authority()
+	var peer_id := get_multiplayer_authority()
+	var role_text := "LOCAL" if local_role else "REMOTE"
+	var status_text := "READY"
+	var label_color := LOCAL_COLOR if local_role else REMOTE_COLOR
+	var visible_players := _visible_player_count()
+	var roster_text := "N%d/%d" % [visible_players, expected_player_count]
+
+	if _waiting_for_network_action:
+		status_text = "WAIT %.2fs" % _request_timeout_left
+		label_color = WAITING_COLOR
+	elif _interaction_cooldown_left > 0.0:
+		status_text = "CD %.2fs" % _interaction_cooldown_left
+		label_color = COOLDOWN_COLOR
+	elif _held_package != null:
+		status_text = "HOLD"
+
+	if visible_players < expected_player_count:
+		roster_text += " MISSING"
+		label_color = Color(1.0, 0.35, 0.35, 1.0)
+
+	_debug_label.text = "P%d %s [%s] %s" % [peer_id, role_text, status_text, roster_text]
+	_debug_label.modulate = label_color
+
+
+func _visible_player_count() -> int:
+	var count := 0
+	for node in get_tree().get_nodes_in_group("players"):
+		if node is Node3D and node.is_inside_tree():
+			count += 1
+	return count

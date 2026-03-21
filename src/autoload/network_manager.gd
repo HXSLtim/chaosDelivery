@@ -3,9 +3,43 @@ extends Node
 const DEFAULT_PORT: int = 7777
 const MAX_PLAYERS: int = 4
 
+enum ConnectionState {
+	DISCONNECTED,
+	CONNECTING,
+	CONNECTED
+}
+
 var is_host: bool = false
 var is_connected: bool = false
+var is_connecting: bool = false
+var connection_state: int = ConnectionState.DISCONNECTED
+var last_connection_error: Error = OK
 var connected_peers: Dictionary = {}
+
+func _apply_state(
+	next_state: int,
+	next_host: bool,
+	failure: Error = OK,
+	reset_peers: bool = false
+) -> void:
+	connection_state = next_state
+	is_connected = next_state == ConnectionState.CONNECTED
+	is_connecting = next_state == ConnectionState.CONNECTING
+	is_host = next_host
+	last_connection_error = failure
+	if reset_peers:
+		connected_peers.clear()
+
+func _clear_connection_state(
+	reset_host: bool = true,
+	close_peer: bool = true,
+	failure: Error = OK
+) -> void:
+	if close_peer and multiplayer.multiplayer_peer:
+		multiplayer.multiplayer_peer.close()
+	if multiplayer.multiplayer_peer != null:
+		multiplayer.multiplayer_peer = null
+	_apply_state(ConnectionState.DISCONNECTED, is_host if not reset_host else false, failure, true)
 
 func _ready() -> void:
 	multiplayer.peer_connected.connect(_on_peer_connected)
@@ -15,36 +49,40 @@ func _ready() -> void:
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
 
 func host_game(port: int = DEFAULT_PORT, max_players: int = MAX_PLAYERS) -> Error:
+	if is_connected and is_host:
+		return OK
+	if multiplayer.multiplayer_peer != null:
+		leave_game()
+
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_server(port, max_players)
 	if err != OK:
+		_apply_state(ConnectionState.DISCONNECTED, false, err, true)
 		return err
 
 	multiplayer.multiplayer_peer = peer
-	is_host = true
-	is_connected = true
-	connected_peers.clear()
+	_apply_state(ConnectionState.CONNECTED, true, OK, true)
 	connected_peers[multiplayer.get_unique_id()] = true
 	EventBus.network_state_changed.emit(is_connected, is_host)
 	return OK
 
 func join_game(address: String, port: int = DEFAULT_PORT) -> Error:
+	if multiplayer.multiplayer_peer != null:
+		_clear_connection_state(true, true, OK)
+
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_client(address, port)
 	if err != OK:
+		_clear_connection_state(true, false, err)
 		return err
 
 	multiplayer.multiplayer_peer = peer
-	is_host = false
+	_apply_state(ConnectionState.CONNECTING, false, OK, true)
+	EventBus.network_state_changed.emit(is_connected, is_host)
 	return OK
 
 func leave_game() -> void:
-	if multiplayer.multiplayer_peer:
-		multiplayer.multiplayer_peer.close()
-	multiplayer.multiplayer_peer = null
-	is_connected = false
-	is_host = false
-	connected_peers.clear()
+	_clear_connection_state(true, true, OK)
 	EventBus.network_state_changed.emit(is_connected, is_host)
 
 func _on_peer_connected(peer_id: int) -> void:
@@ -56,18 +94,21 @@ func _on_peer_disconnected(peer_id: int) -> void:
 	EventBus.player_left.emit(peer_id)
 
 func _on_connected_to_server() -> void:
-	is_connected = true
-	connected_peers.clear()
+	if multiplayer.multiplayer_peer == null or is_host:
+		return
+	_apply_state(ConnectionState.CONNECTED, false, OK, true)
 	connected_peers[multiplayer.get_unique_id()] = true
 	connected_peers[1] = true
 	EventBus.network_state_changed.emit(is_connected, is_host)
 
 func _on_connection_failed() -> void:
-	is_connected = false
+	if is_host or connection_state != ConnectionState.CONNECTING:
+		return
+	_clear_connection_state(true, true, ERR_CANT_CONNECT)
 	EventBus.network_state_changed.emit(is_connected, is_host)
 
 func _on_server_disconnected() -> void:
-	is_connected = false
-	is_host = false
-	connected_peers.clear()
+	if connection_state == ConnectionState.DISCONNECTED:
+		return
+	_clear_connection_state(true, true, OK)
 	EventBus.network_state_changed.emit(is_connected, is_host)

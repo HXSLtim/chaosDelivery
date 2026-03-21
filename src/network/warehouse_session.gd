@@ -10,6 +10,13 @@ const PACKAGE_SYNC_INTERVAL := 0.1
 const DELIVERY_REWARD_GOLD := 25
 const DELIVERY_REWARD_SCORE := 100
 
+enum SessionTransition {
+	NONE,
+	HOSTING,
+	JOINING,
+	LEAVING
+}
+
 @onready var _players: Node3D = $Players
 @onready var _packages: Node3D = $Packages
 @onready var _player_spawn: Marker3D = $SpawnPoints/PlayerSpawn
@@ -19,6 +26,8 @@ const DELIVERY_REWARD_SCORE := 100
 
 var _package_sync_timer: float = 0.0
 var _next_package_id: int = 1
+var _network_action_cooldown: float = 0.0
+var _session_transition: SessionTransition = SessionTransition.NONE
 
 
 func _ready() -> void:
@@ -35,6 +44,8 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	_network_action_cooldown = maxf(0.0, _network_action_cooldown - delta)
+
 	if not NetworkManager.is_connected or not NetworkManager.is_host:
 		return
 
@@ -97,11 +108,19 @@ func request_player_throw(player: Node3D, impulse: Vector3) -> bool:
 func _host_local_session() -> void:
 	if NetworkManager.is_connected:
 		return
+	if _network_action_cooldown > 0.0:
+		return
+	if _is_network_transition_in_progress():
+		return
 
+	_session_transition = SessionTransition.HOSTING
 	_clear_world()
+	_configure_delivery_zone(false)
 	var err := NetworkManager.host_game()
 	if err != OK:
-		push_warning("Failed to host LAN session: %s" % error_string(err))
+		_session_transition = SessionTransition.NONE
+		_network_action_cooldown = 0.8
+		push_warning("Failed to host LAN session on port %d: %s" % [NetworkManager.DEFAULT_PORT, error_string(err)])
 		_spawn_offline_world()
 		return
 
@@ -109,19 +128,28 @@ func _host_local_session() -> void:
 func _join_local_session() -> void:
 	if NetworkManager.is_connected:
 		return
+	if _network_action_cooldown > 0.0:
+		return
+	if _is_network_transition_in_progress():
+		return
 
+	_session_transition = SessionTransition.JOINING
 	_clear_world()
 	_configure_delivery_zone(false)
 	var err := NetworkManager.join_game(LOCALHOST_ADDRESS)
 	if err != OK:
+		_session_transition = SessionTransition.NONE
+		_network_action_cooldown = 0.4
 		push_warning("Failed to join LAN session: %s" % error_string(err))
 		_spawn_offline_world()
 
 
 func _leave_session() -> void:
-	if NetworkManager.is_connected:
+	_session_transition = SessionTransition.LEAVING
+	if NetworkManager.is_connected or _has_active_network_peer():
 		NetworkManager.leave_game()
 	else:
+		_session_transition = SessionTransition.NONE
 		_spawn_offline_world()
 
 
@@ -138,12 +166,13 @@ func _on_player_joined(peer_id: int) -> void:
 
 
 func _on_player_left(peer_id: int) -> void:
-	var player := _players.get_node_or_null(str(peer_id))
+	var player := _find_player_by_peer_id(peer_id)
 	if player != null:
 		player.queue_free()
 
 
 func _on_network_state_changed(connected: bool, host: bool) -> void:
+	_session_transition = SessionTransition.NONE
 	_configure_delivery_zone(not connected or host)
 
 	if not connected:
@@ -153,7 +182,10 @@ func _on_network_state_changed(connected: bool, host: bool) -> void:
 	if host:
 		_build_host_world()
 	else:
+		_clear_world()
 		_update_local_player_profile(multiplayer.get_unique_id())
+		if multiplayer.get_unique_id() != 1:
+			_spawn_player_local(1, _player_spawn_position_for_peer(1))
 		_spawn_player_local(multiplayer.get_unique_id(), _player_spawn_position_for_peer(multiplayer.get_unique_id()))
 		_request_full_state.rpc_id(1)
 		GameState.set_phase(EventBus.GamePhase.WORKING)
@@ -181,10 +213,11 @@ func _on_delivery_rejected(_package_id: String, _reason: String) -> void:
 
 
 func _spawn_offline_world() -> void:
-	if NetworkManager.is_connected:
+	if NetworkManager.is_connected or _has_active_network_peer():
 		return
 
 	_clear_world()
+	_reset_delivery_zone_state()
 	_next_package_id = 1
 	_update_local_player_profile(1)
 	_spawn_player_local(1, _player_spawn.global_position)
@@ -194,8 +227,19 @@ func _spawn_offline_world() -> void:
 	_seed_orders()
 
 
+func _has_active_network_peer() -> bool:
+	return NetworkManager.multiplayer.multiplayer_peer != null
+
+
+func _is_network_transition_in_progress() -> bool:
+	if _session_transition != SessionTransition.NONE:
+		return true
+	return not NetworkManager.is_connected and _has_active_network_peer()
+
+
 func _build_host_world() -> void:
 	_clear_world()
+	_reset_delivery_zone_state()
 	_next_package_id = 1
 	var peer_id := multiplayer.get_unique_id()
 	_update_local_player_profile(peer_id)
@@ -208,10 +252,10 @@ func _build_host_world() -> void:
 
 
 func _sync_world_to_peer(peer_id: int) -> void:
-	for player in _players.get_children():
+	for player in _get_all_players():
 		_spawn_player_for_peer.rpc_id(peer_id, int(player.name), player.global_position)
 
-	for package in _packages.get_children():
+	for package in _get_all_packages():
 		_spawn_package_for_peer.rpc_id(peer_id, String(package.name), package.global_position)
 		if package.has_method("get_network_snapshot"):
 			_apply_package_snapshot.rpc_id(peer_id, String(package.name), package.get_network_snapshot())
@@ -227,12 +271,12 @@ func _sync_world_to_peer(peer_id: int) -> void:
 
 
 func _spawn_player_local(peer_id: int, spawn_position: Vector3) -> void:
-	var node_name := str(peer_id)
-	if _players.has_node(NodePath(node_name)):
-		var existing_player := _players.get_node(NodePath(node_name)) as Node3D
+	var existing_player := _find_player_by_peer_id(peer_id)
+	if existing_player != null:
 		existing_player.global_position = spawn_position
 		return
 
+	var node_name := str(peer_id)
 	var player := PLAYER_SCENE.instantiate()
 	player.name = node_name
 	player.set_multiplayer_authority(peer_id)
@@ -243,9 +287,8 @@ func _spawn_player_local(peer_id: int, spawn_position: Vector3) -> void:
 
 func _spawn_package_local(package_name: String, spawn_position: Vector3, package_id: String = "") -> Node3D:
 	var package: Node3D
-	if _packages.has_node(NodePath(package_name)):
-		package = _packages.get_node(NodePath(package_name)) as Node3D
-	else:
+	package = _find_package_by_name(package_name)
+	if package == null:
 		package = PACKAGE_SCENE.instantiate()
 		package.name = package_name
 		_packages.add_child(package, true)
@@ -259,11 +302,13 @@ func _spawn_package_local(package_name: String, spawn_position: Vector3, package
 
 
 func _clear_world() -> void:
-	for child in _players.get_children():
-		child.free()
+	for child in _get_all_players():
+		if child != null and is_instance_valid(child):
+			child.free()
 
-	for child in _packages.get_children():
-		child.free()
+	for child in _get_all_packages():
+		if child != null and is_instance_valid(child):
+			child.free()
 
 
 func _update_local_player_profile(peer_id: int) -> void:
@@ -313,6 +358,13 @@ func _configure_delivery_zone(active: bool) -> void:
 	_delivery_zone.monitorable = active
 
 
+func _reset_delivery_zone_state() -> void:
+	if _delivery_zone == null:
+		return
+	if _delivery_zone.has_method("reset_delivery_tracking"):
+		_delivery_zone.reset_delivery_tracking()
+
+
 func _host_try_grab(player: Node3D) -> bool:
 	var package: Node = _find_grabbable_package_near(player)
 	if package == null:
@@ -339,7 +391,7 @@ func _find_grabbable_package_near(player: Node3D):
 	var nearest_package = null
 	var max_distance_squared := _player_grab_range(player) * _player_grab_range(player)
 
-	for package in _packages.get_children():
+	for package in _get_all_packages():
 		if not package.has_method("can_accept_grab_request"):
 			continue
 		if not package.can_accept_grab_request(player, player.get_multiplayer_authority(), _player_grab_range(player)):
@@ -356,14 +408,14 @@ func _find_grabbable_package_near(player: Node3D):
 
 
 func _find_package_held_by_player(player: Node3D):
-	for package in _packages.get_children():
+	for package in _get_all_packages():
 		if package.get("holder") == player:
 			return package
 	return null
 
 
 func _find_package_by_id(package_id: String):
-	for package in _packages.get_children():
+	for package in _get_all_packages():
 		if String(package.get("package_id")) == package_id:
 			return package
 	return null
@@ -409,8 +461,24 @@ func _allocate_package_id() -> String:
 
 
 func _broadcast_all_package_snapshots() -> void:
-	for package in _packages.get_children():
+	for package in _get_all_packages():
 		_broadcast_package_snapshot(package)
+
+
+func _get_all_players() -> Array:
+	var players: Array = []
+	for node in get_tree().get_nodes_in_group("players"):
+		if node is Node3D and is_ancestor_of(node):
+			players.append(node)
+	return players
+
+
+func _get_all_packages() -> Array:
+	var packages: Array = []
+	for node in get_tree().get_nodes_in_group("packages"):
+		if node is Node3D and is_ancestor_of(node):
+			packages.append(node)
+	return packages
 
 
 func _broadcast_package_snapshot(package: Node) -> void:
@@ -464,7 +532,7 @@ func _request_grab() -> void:
 		return
 
 	var sender_id := multiplayer.get_remote_sender_id()
-	var player := _players.get_node_or_null(str(sender_id)) as Node3D
+	var player := _find_player_by_peer_id(sender_id)
 	if player != null:
 		_host_try_grab(player)
 
@@ -475,7 +543,7 @@ func _request_drop(impulse: Vector3) -> void:
 		return
 
 	var sender_id := multiplayer.get_remote_sender_id()
-	var player := _players.get_node_or_null(str(sender_id)) as Node3D
+	var player := _find_player_by_peer_id(sender_id)
 	if player != null:
 		_host_try_drop(player, impulse)
 
@@ -504,6 +572,21 @@ func _apply_package_snapshot(package_name: String, snapshot: Dictionary) -> void
 	var package = _spawn_package_local(package_name, snapshot.get("position", _package_spawn.global_position))
 	if package != null and package.has_method("apply_network_snapshot"):
 		package.apply_network_snapshot(snapshot)
+
+
+func _find_player_by_peer_id(peer_id: int) -> Node3D:
+	var node_name := str(peer_id)
+	for player in _get_all_players():
+		if String(player.name) == node_name:
+			return player as Node3D
+	return null
+
+
+func _find_package_by_name(package_name: String) -> Node3D:
+	for package in _get_all_packages():
+		if String(package.name) == package_name:
+			return package as Node3D
+	return null
 
 
 @rpc("authority", "reliable")
