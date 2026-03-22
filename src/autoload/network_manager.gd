@@ -16,6 +16,35 @@ var connection_state: int = ConnectionState.DISCONNECTED
 var last_connection_error: Error = OK
 var connected_peers: Dictionary = {}
 
+func has_active_peer() -> bool:
+	return multiplayer.multiplayer_peer != null
+
+func is_disconnected() -> bool:
+	return connection_state == ConnectionState.DISCONNECTED
+
+func get_connection_state() -> int:
+	return connection_state
+
+func get_connection_state_name() -> String:
+	match connection_state:
+		ConnectionState.DISCONNECTED:
+			return "DISCONNECTED"
+		ConnectionState.CONNECTING:
+			return "CONNECTING"
+		ConnectionState.CONNECTED:
+			return "CONNECTED"
+		_:
+			return "UNKNOWN"
+
+func get_connected_peer_count() -> int:
+	return connected_peers.size()
+
+func get_connected_peer_ids() -> Array[int]:
+	var peer_ids: Array[int] = []
+	for peer_id in connected_peers.keys():
+		peer_ids.append(int(peer_id))
+	return peer_ids
+
 func _apply_state(
 	next_state: int,
 	next_host: bool,
@@ -34,12 +63,22 @@ func _clear_connection_state(
 	reset_host: bool = true,
 	close_peer: bool = true,
 	failure: Error = OK
-) -> void:
-	if close_peer and multiplayer.multiplayer_peer:
+) -> bool:
+	var had_peer := multiplayer.multiplayer_peer != null
+	var next_host := is_host if not reset_host else false
+	var did_change := (
+		connection_state != ConnectionState.DISCONNECTED
+		or is_host != next_host
+		or connected_peers.size() > 0
+		or had_peer
+	)
+
+	if close_peer and had_peer:
 		multiplayer.multiplayer_peer.close()
-	if multiplayer.multiplayer_peer != null:
+	if had_peer:
 		multiplayer.multiplayer_peer = null
-	_apply_state(ConnectionState.DISCONNECTED, is_host if not reset_host else false, failure, true)
+	_apply_state(ConnectionState.DISCONNECTED, next_host, failure, true)
+	return did_change
 
 func _ready() -> void:
 	multiplayer.peer_connected.connect(_on_peer_connected)
@@ -82,8 +121,8 @@ func join_game(address: String, port: int = DEFAULT_PORT) -> Error:
 	return OK
 
 func leave_game() -> void:
-	_clear_connection_state(true, true, OK)
-	EventBus.network_state_changed.emit(is_connected, is_host)
+	if _clear_connection_state(true, true, OK):
+		EventBus.network_state_changed.emit(is_connected, is_host)
 
 func _on_peer_connected(peer_id: int) -> void:
 	connected_peers[peer_id] = true
@@ -104,11 +143,11 @@ func _on_connected_to_server() -> void:
 func _on_connection_failed() -> void:
 	if is_host or connection_state != ConnectionState.CONNECTING:
 		return
-	_clear_connection_state(true, true, ERR_CANT_CONNECT)
-	EventBus.network_state_changed.emit(is_connected, is_host)
+	if _clear_connection_state(true, true, ERR_CANT_CONNECT):
+		EventBus.network_state_changed.emit(is_connected, is_host)
 
 func _on_server_disconnected() -> void:
 	if connection_state == ConnectionState.DISCONNECTED:
 		return
-	_clear_connection_state(true, true, OK)
-	EventBus.network_state_changed.emit(is_connected, is_host)
+	if _clear_connection_state(true, true, OK):
+		EventBus.network_state_changed.emit(is_connected, is_host)
