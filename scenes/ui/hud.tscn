@@ -32,8 +32,14 @@ text = "Score: N/A"
 [node name="NetworkLabel" type="Label" parent="Panel/Content"]
 text = "Network: Offline"
 
+[node name="NetworkDetailLabel" type="Label" parent="Panel/Content"]
+text = "Net Detail: Press F5 to host LAN or F6 to join localhost."
+
 [node name="OrdersLabel" type="Label" parent="Panel/Content"]
 text = "Orders: Pending N/A  Completed N/A  Failed N/A"
+
+[node name="DeliveryFeedbackLabel" type="Label" parent="Panel/Content"]
+text = "Delivery: Waiting for first result.  Next: N/A"
 
 [node name="ControlsLabel" type="Label" parent="Panel/Content"]
 text = "Controls: WASD Move  E Grab/Drop  F Throw"

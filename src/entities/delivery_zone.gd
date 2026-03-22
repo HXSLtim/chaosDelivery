@@ -25,11 +25,21 @@ func _ready() -> void:
 
 
 func _on_body_entered(body: Node) -> void:
+	if body == null or not is_instance_valid(body):
+		return
+
 	if not _is_package(body):
 		return
 
 	var package_id := _extract_package_id(body)
+	if package_id.is_empty():
+		package_id = "unknown_package"
 	if _delivered_cache.has(package_id):
+		return
+
+	var state_rejection_reason := _get_package_rejection_reason(body)
+	if not state_rejection_reason.is_empty():
+		delivery_rejected.emit(package_id, state_rejection_reason)
 		return
 
 	if _order_manager == null or not is_instance_valid(_order_manager):
@@ -37,11 +47,21 @@ func _on_body_entered(body: Node) -> void:
 	if _order_manager == null:
 		delivery_rejected.emit(package_id, "missing_order_manager")
 		return
+	if not _order_manager.has_method("validate_delivery"):
+		delivery_rejected.emit(package_id, "invalid_order_manager")
+		return
 
-	var result: Dictionary = _order_manager.validate_delivery(body, destination_id)
+	var raw_result: Variant = _order_manager.validate_delivery(body, destination_id)
+	if not (raw_result is Dictionary):
+		delivery_rejected.emit(package_id, "invalid_validation_result")
+		return
+
+	var result: Dictionary = raw_result
 	var is_ok := bool(result.get("ok", false))
 	var order_id := String(result.get("order_id", ""))
-	var reason := String(result.get("reason", "unknown"))
+	var reason := String(result.get("reason", ""))
+	if reason.is_empty():
+		reason = "validation_rejected"
 
 	if is_ok:
 		_delivered_cache[package_id] = true
@@ -72,13 +92,53 @@ func reset_delivery_tracking() -> void:
 
 
 func _is_package(node: Node) -> bool:
-	return node != null and node.is_in_group("packages")
+	return node != null and is_instance_valid(node) and node.is_in_group("packages")
+
+
+func _get_package_rejection_reason(node: Node) -> String:
+	if _is_package_held(node):
+		return "package_state_held"
+	if _is_package_frozen(node):
+		return "package_state_frozen"
+	if _is_package_thrown(node):
+		return "package_state_thrown"
+	return ""
+
+
+func _is_package_held(node: Node) -> bool:
+	if node == null or not is_instance_valid(node):
+		return false
+	if node.has_method("is_held"):
+		return bool(node.call("is_held"))
+	return false
+
+
+func _is_package_frozen(node: Node) -> bool:
+	if node == null or not is_instance_valid(node):
+		return false
+	var freeze_state: Variant = node.get("freeze")
+	if freeze_state is bool:
+		return bool(freeze_state)
+	if freeze_state is int:
+		return int(freeze_state) != 0
+	return false
+
+
+func _is_package_thrown(node: Node) -> bool:
+	if node == null or not is_instance_valid(node):
+		return false
+	if node.has_method("is_thrown"):
+		return bool(node.call("is_thrown"))
+	return false
 
 
 func _extract_package_id(node: Node) -> String:
-	if node == null:
+	if node == null or not is_instance_valid(node):
 		return ""
 	var package_id: Variant = node.get("package_id")
 	if package_id != null and String(package_id) != "":
 		return String(package_id)
-	return String(node.name)
+	var fallback_name := String(node.name)
+	if fallback_name != "":
+		return fallback_name
+	return "instance_%d" % node.get_instance_id()

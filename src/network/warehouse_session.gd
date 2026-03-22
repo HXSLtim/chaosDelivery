@@ -195,9 +195,10 @@ func _on_package_delivered(package_id: String, _order_id: String) -> void:
 	if NetworkManager.is_connected and not NetworkManager.is_host:
 		return
 
-	GameState.completed_orders += 1
+	_increment_completed_orders(1)
 	GameState.add_gold(DELIVERY_REWARD_GOLD)
 	GameState.add_score(DELIVERY_REWARD_SCORE)
+	GameState.set_delivery_feedback("success", "Package delivered.", package_id, _order_id)
 
 	var package: Node = _find_package_by_id(package_id)
 	if package == null:
@@ -208,8 +209,18 @@ func _on_package_delivered(package_id: String, _order_id: String) -> void:
 	_broadcast_order_state()
 
 
-func _on_delivery_rejected(_package_id: String, _reason: String) -> void:
-	pass
+func _on_delivery_rejected(package_id: String, _reason: String) -> void:
+	if NetworkManager.is_connected and not NetworkManager.is_host:
+		return
+
+	_increment_failed_orders(1)
+	GameState.set_delivery_feedback("rejected", _delivery_rejection_message(_reason), package_id, "")
+
+	var package: Node = _find_package_by_id(package_id)
+	if package == null:
+		package = _packages.get_node_or_null(PACKAGE_NODE_NAME)
+	_respawn_package(package)
+	_broadcast_order_state()
 
 
 func _spawn_offline_world() -> void:
@@ -225,6 +236,30 @@ func _spawn_offline_world() -> void:
 	GameState.reset_session("warehouse_test")
 	GameState.set_phase(EventBus.GamePhase.WORKING)
 	_seed_orders()
+
+
+func _delivery_rejection_message(reason: String) -> String:
+	match reason:
+		"destination_mismatch":
+			return "Wrong destination."
+		"package_type_mismatch":
+			return "Wrong package type."
+		"no_pending_order":
+			return "No pending order."
+		"package_state_held":
+			return "Drop the package before delivery."
+		"package_state_frozen":
+			return "Package is not ready for delivery."
+		"package_state_thrown":
+			return "Wait for the package to land."
+		"missing_order_manager":
+			return "Order system unavailable."
+		"invalid_order_manager":
+			return "Order system invalid."
+		"invalid_validation_result":
+			return "Delivery validation failed."
+		_:
+			return "Delivery rejected."
 
 
 func _has_active_network_peer() -> bool:
@@ -312,8 +347,63 @@ func _clear_world() -> void:
 
 
 func _update_local_player_profile(peer_id: int) -> void:
-	GameState.local_player_id = peer_id
-	GameState.local_player_name = "Player %d" % peer_id
+	var player_name := "Player %d" % peer_id
+	if GameState.has_method("set_local_player_profile"):
+		GameState.set_local_player_profile(peer_id, player_name)
+		return
+	if GameState.has_method("update_local_player_profile"):
+		GameState.update_local_player_profile(peer_id, player_name)
+		return
+	if GameState.has_method("set_local_player_identity"):
+		GameState.set_local_player_identity(peer_id, player_name)
+		return
+
+	GameState.set("local_player_id", peer_id)
+	GameState.set("local_player_name", player_name)
+
+
+func _increment_completed_orders(amount: int) -> void:
+	if amount == 0:
+		return
+
+	if GameState.has_method("add_completed_orders"):
+		GameState.add_completed_orders(amount)
+		return
+	if GameState.has_method("increment_completed_orders"):
+		GameState.increment_completed_orders(amount)
+		return
+	if GameState.has_method("update_completed_orders"):
+		GameState.update_completed_orders(amount)
+		return
+
+	GameState.apply_session_totals(
+		GameState.completed_orders + amount,
+		GameState.failed_orders,
+		GameState.current_gold,
+		GameState.current_score
+	)
+
+
+func _increment_failed_orders(amount: int) -> void:
+	if amount == 0:
+		return
+
+	if GameState.has_method("add_failed_orders"):
+		GameState.add_failed_orders(amount)
+		return
+	if GameState.has_method("increment_failed_orders"):
+		GameState.increment_failed_orders(amount)
+		return
+	if GameState.has_method("update_failed_orders"):
+		GameState.update_failed_orders(amount)
+		return
+
+	GameState.apply_session_totals(
+		GameState.completed_orders,
+		GameState.failed_orders + amount,
+		GameState.current_gold,
+		GameState.current_score
+	)
 
 
 func _apply_player_debug_tint(player: Node, peer_id: int) -> void:

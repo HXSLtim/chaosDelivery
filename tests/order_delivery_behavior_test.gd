@@ -14,8 +14,10 @@ func run(tree: SceneTree) -> Array[String]:
 	_failures.clear()
 
 	await _test_order_ids_and_event_emits_are_deterministic()
+	await _test_order_manager_change_signals_and_pending_helper_are_deterministic()
 	await _test_validate_delivery_rejects_mismatch_and_accepts_match()
 	await _test_delivery_zone_deduplicates_delivery_until_phase_reset()
+	await _test_delivery_zone_uses_node_name_when_package_id_missing()
 	await _test_delivery_zone_rejects_when_order_manager_is_missing()
 
 	return _failures
@@ -56,6 +58,97 @@ func _test_order_ids_and_event_emits_are_deterministic() -> void:
 		event_bus.order_added.disconnect(on_added)
 	if event_bus != null and event_bus.order_completed.is_connected(on_completed):
 		event_bus.order_completed.disconnect(on_completed)
+
+	world.queue_free()
+	await _tree.process_frame
+
+
+func _test_order_manager_change_signals_and_pending_helper_are_deterministic() -> void:
+	var world := _make_world("OrderChangeSignals")
+	var manager = ORDER_MANAGER_SCRIPT.new()
+	world.add_child(manager)
+	await _tree.process_frame
+
+	_assert(manager.has_method("get_pending_order_count"), "order manager should expose get_pending_order_count helper")
+	_assert(manager.has_signal("order_created"), "order manager should expose order_created signal")
+	_assert(manager.has_signal("order_marked_completed"), "order manager should expose order_marked_completed signal")
+	_assert(manager.has_signal("orders_changed"), "order manager should expose orders_changed signal")
+	_assert(manager.has_signal("pending_count_changed"), "order manager should expose pending_count_changed signal")
+	_assert(manager.has_signal("orders_cleared"), "order manager should expose orders_cleared signal")
+
+	var created_ids: Array[String] = []
+	var completed_ids: Array[String] = []
+	var change_events: Array[Dictionary] = []
+	var pending_counts: Array[int] = []
+	var cleared_events: Array[bool] = []
+
+	var on_created := func(order_id: String, _order: Dictionary) -> void:
+		created_ids.append(order_id)
+	var on_completed := func(order_id: String, _order: Dictionary) -> void:
+		completed_ids.append(order_id)
+	var on_changed := func(reason: String, order_id: String, pending_count: int, total_count: int) -> void:
+		change_events.append({
+			"reason": reason,
+			"order_id": order_id,
+			"pending": pending_count,
+			"total": total_count
+		})
+	var on_pending_count_changed := func(pending_count: int) -> void:
+		pending_counts.append(pending_count)
+	var on_cleared := func() -> void:
+		cleared_events.append(true)
+
+	if manager.has_signal("order_created"):
+		manager.order_created.connect(on_created)
+	if manager.has_signal("order_marked_completed"):
+		manager.order_marked_completed.connect(on_completed)
+	if manager.has_signal("orders_changed"):
+		manager.orders_changed.connect(on_changed)
+	if manager.has_signal("pending_count_changed"):
+		manager.pending_count_changed.connect(on_pending_count_changed)
+	if manager.has_signal("orders_cleared"):
+		manager.orders_cleared.connect(on_cleared)
+
+	manager.clear_orders()
+	_assert(manager.get_pending_order_count() == 0, "pending helper should start at zero after clear")
+
+	var first := manager.create_order("normal", "A")
+	_assert(manager.get_pending_order_count() == 1, "pending helper should increment after first create")
+
+	var second := manager.create_order("fragile", "B")
+	_assert(manager.get_pending_order_count() == 2, "pending helper should increment after second create")
+
+	var completed := manager.complete_order(first)
+	_assert(completed, "complete_order should succeed for first created order")
+	_assert(manager.get_pending_order_count() == 1, "pending helper should decrement after completion")
+
+	manager.clear_orders()
+	_assert(manager.get_pending_order_count() == 0, "pending helper should reset after clear_orders")
+
+	_assert(created_ids == [first, second], "order_created should emit deterministic ids in creation order")
+	_assert(completed_ids == [first], "order_marked_completed should emit exactly once for completed order")
+	_assert(
+		change_events == [
+			{"reason": "created", "order_id": first, "pending": 1, "total": 1},
+			{"reason": "created", "order_id": second, "pending": 2, "total": 2},
+			{"reason": "completed", "order_id": first, "pending": 1, "total": 2},
+			{"reason": "cleared", "order_id": "", "pending": 0, "total": 0}
+		],
+		"orders_changed should emit deterministic reason/id/pending/total snapshots"
+	)
+	_assert(pending_counts == [1, 2, 1, 0], "pending_count_changed should emit deterministic pending sequence")
+	_assert(cleared_events.size() == 1, "orders_cleared should emit once when clearing non-empty order list")
+
+	if manager.has_signal("order_created") and manager.order_created.is_connected(on_created):
+		manager.order_created.disconnect(on_created)
+	if manager.has_signal("order_marked_completed") and manager.order_marked_completed.is_connected(on_completed):
+		manager.order_marked_completed.disconnect(on_completed)
+	if manager.has_signal("orders_changed") and manager.orders_changed.is_connected(on_changed):
+		manager.orders_changed.disconnect(on_changed)
+	if manager.has_signal("pending_count_changed") and manager.pending_count_changed.is_connected(on_pending_count_changed):
+		manager.pending_count_changed.disconnect(on_pending_count_changed)
+	if manager.has_signal("orders_cleared") and manager.orders_cleared.is_connected(on_cleared):
+		manager.orders_cleared.disconnect(on_cleared)
 
 	world.queue_free()
 	await _tree.process_frame
@@ -164,6 +257,59 @@ func _test_delivery_zone_deduplicates_delivery_until_phase_reset() -> void:
 	_assert(
 		delivered_ids.size() == 2,
 		"delivery cache should reset on preparation phase and allow delivery again (got %d deliveries, reasons=%s)" % [delivered_ids.size(), rejected_reasons]
+	)
+
+	world.queue_free()
+	await _tree.process_frame
+
+
+func _test_delivery_zone_uses_node_name_when_package_id_missing() -> void:
+	var world := _make_world("DeliveryZonePackageIdFallback")
+	var gameplay := Node.new()
+	gameplay.name = "Gameplay"
+	world.add_child(gameplay)
+
+	var manager = ORDER_MANAGER_SCRIPT.new()
+	gameplay.add_child(manager)
+
+	var zone = DELIVERY_ZONE_SCENE.instantiate()
+	zone.auto_seed_static_order = false
+	zone.destination_id = "A"
+	gameplay.add_child(zone)
+	await _tree.process_frame
+
+	manager.clear_orders()
+	manager.create_order("normal", "A")
+
+	var delivered_ids: Array[String] = []
+	var on_delivered := func(package_id: String, _order_id: String) -> void:
+		delivered_ids.append(package_id)
+	zone.package_delivered.connect(on_delivered)
+
+	var package = PACKAGE_SCENE.instantiate()
+	package.name = "PkgNameFallback"
+	package.package_id = ""
+	package.package_type = "normal"
+	world.add_child(package)
+	await _tree.process_frame
+
+	zone._on_body_entered(package)
+	zone._on_body_entered(package)
+	_assert(
+		delivered_ids == ["PkgNameFallback"],
+		"delivery zone should fallback to node name for empty package_id and dedupe duplicate entries"
+	)
+
+	var event_bus := _get_event_bus()
+	if event_bus != null:
+		event_bus.phase_changed.emit(int(EVENT_BUS_SCRIPT.GamePhase.LOBBY), int(EVENT_BUS_SCRIPT.GamePhase.WORKING))
+	manager.clear_orders()
+	manager.create_order("normal", "A")
+	zone._on_body_entered(package)
+
+	_assert(
+		delivered_ids == ["PkgNameFallback", "PkgNameFallback"],
+		"delivery zone should reset name-based delivery cache on lobby phase changes"
 	)
 
 	world.queue_free()

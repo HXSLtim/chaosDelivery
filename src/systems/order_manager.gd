@@ -3,6 +3,12 @@ class_name OrderManager
 
 const DEFAULT_STATIC_ORDER_ID := "order_static_1"
 
+signal order_created(order_id: String, order: Dictionary)
+signal order_marked_completed(order_id: String, order: Dictionary)
+signal orders_cleared
+signal orders_changed(reason: String, order_id: String, pending_count: int, total_count: int)
+signal pending_count_changed(pending_count: int)
+
 var active_orders: Array[Dictionary] = []
 var _next_order_index: int = 1
 
@@ -21,9 +27,11 @@ func create_order(package_type: String = "normal", destination: String = "A") ->
 		"is_completed": false
 	}
 	active_orders.append(order)
+	_emit_order_created(order_id, order)
 	var event_bus := _get_event_bus()
 	if event_bus != null:
 		event_bus.order_added.emit(order_id)
+	_emit_order_change("created", order_id)
 	return order_id
 
 func complete_order(order_id: String) -> bool:
@@ -35,15 +43,21 @@ func complete_order(order_id: String) -> bool:
 			return false
 		order["is_completed"] = true
 		active_orders[i] = order
+		emit_signal("order_marked_completed", order_id, order)
 		var event_bus := _get_event_bus()
 		if event_bus != null:
 			event_bus.order_completed.emit(order_id)
+		_emit_order_change("completed", order_id)
 		return true
 	return false
 
 func clear_orders() -> void:
+	var had_orders := not active_orders.is_empty()
 	active_orders.clear()
 	_next_order_index = 1
+	if had_orders:
+		emit_signal("orders_cleared")
+		_emit_order_change("cleared", "")
 
 
 func ensure_static_order(package_type: String = "normal", destination: String = "A") -> String:
@@ -58,9 +72,11 @@ func ensure_static_order(package_type: String = "normal", destination: String = 
 		"is_completed": false
 	}
 	active_orders.append(order)
+	_emit_order_created(DEFAULT_STATIC_ORDER_ID, order)
 	var event_bus := _get_event_bus()
 	if event_bus != null:
 		event_bus.order_added.emit(DEFAULT_STATIC_ORDER_ID)
+	_emit_order_change("created", DEFAULT_STATIC_ORDER_ID)
 	return DEFAULT_STATIC_ORDER_ID
 
 
@@ -69,6 +85,13 @@ func get_first_pending_order() -> Dictionary:
 		if not order.get("is_completed", false):
 			return order
 	return {}
+
+func get_pending_order_count() -> int:
+	var pending_count := 0
+	for order in active_orders:
+		if not order.get("is_completed", false):
+			pending_count += 1
+	return pending_count
 
 
 func validate_delivery(package_node: Node, destination: String) -> Dictionary:
@@ -139,3 +162,13 @@ func _extract_package_type(package_node: Node) -> String:
 
 func _get_event_bus() -> Node:
 	return get_node_or_null("/root/EventBus")
+
+
+func _emit_order_created(order_id: String, order: Dictionary) -> void:
+	emit_signal("order_created", order_id, order)
+
+
+func _emit_order_change(reason: String, order_id: String) -> void:
+	var pending_count := get_pending_order_count()
+	emit_signal("orders_changed", reason, order_id, pending_count, active_orders.size())
+	emit_signal("pending_count_changed", pending_count)

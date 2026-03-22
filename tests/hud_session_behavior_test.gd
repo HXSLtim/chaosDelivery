@@ -18,8 +18,13 @@ func run(tree: SceneTree) -> Array[String]:
 	_capture_global_state()
 
 	await _test_hud_reflects_state_and_formats_labels()
+	await _test_hud_network_feedback_includes_connecting_and_error_metadata()
+	await _test_hud_process_refreshes_after_interval_when_game_state_changes()
 	await _test_hud_order_status_falls_back_when_no_order_manager_exists()
+	await _test_hud_order_status_updates_immediately_when_orders_are_cleared()
+	await _test_hud_delivery_feedback_prefers_explicit_game_state_feedback()
 	await _test_delivery_tracking_resets_when_session_requests_reset()
+	await _test_rejected_delivery_increments_failed_orders_and_respawns_package()
 	await _test_apply_order_state_local_filters_and_copies_snapshot()
 
 	_restore_global_state()
@@ -83,6 +88,86 @@ func _test_hud_reflects_state_and_formats_labels() -> void:
 	await _tree.process_frame
 
 
+func _test_hud_network_feedback_includes_connecting_and_error_metadata() -> void:
+	_set_network_disconnected_baseline()
+
+	var root := Node3D.new()
+	root.name = "HudNetworkFeedbackRoot"
+	_tree.root.add_child(root)
+
+	var hud = HUD_SCENE.instantiate()
+	root.add_child(hud)
+	await _tree.process_frame
+
+	var network_manager := _network_manager()
+	network_manager.set("is_connected", false)
+	network_manager.set("is_host", false)
+	network_manager.set("is_connecting", true)
+	network_manager.set("last_connection_error", int(OK))
+	network_manager.set("connected_peers", {})
+	hud._refresh_labels()
+	_assert(
+		_label_text(hud, "NetworkLabel").begins_with("Network: Connecting (Client"),
+		"HUD should explicitly show connecting status for readability while link is in progress"
+	)
+
+	network_manager.set("is_connecting", false)
+	network_manager.set("last_connection_error", int(ERR_CANT_CONNECT))
+	hud._refresh_labels()
+	var disconnected_label := _label_text(hud, "NetworkLabel")
+	_assert(
+		disconnected_label.begins_with("Network: Disconnected (Client"),
+		"HUD should return to disconnected status once connecting flag is cleared"
+	)
+	_assert(
+		disconnected_label.contains("last_error="),
+		"HUD should include last connection error metadata to aid failure readability"
+	)
+
+	var missing_flags_node := Node.new()
+	var unknown_label: String = String(hud._format_network_status(missing_flags_node))
+	missing_flags_node.free()
+	_assert(
+		unknown_label == "Unknown (Missing is_connected)",
+		"HUD should provide deterministic fallback copy when network manager shape is incomplete"
+	)
+
+	root.queue_free()
+	await _tree.process_frame
+
+
+func _test_hud_process_refreshes_after_interval_when_game_state_changes() -> void:
+	_set_network_disconnected_baseline()
+
+	var root := Node3D.new()
+	root.name = "HudProcessRefreshRoot"
+	_tree.root.add_child(root)
+
+	var hud = HUD_SCENE.instantiate()
+	root.add_child(hud)
+	await _tree.process_frame
+
+	var game_state := _game_state()
+	game_state.current_gold = 10
+	game_state.current_score = 20
+	hud._refresh_labels()
+	hud._refresh_timer = hud._refresh_interval
+
+	game_state.current_gold = 99
+	game_state.current_score = 123
+
+	hud._process(0.05)
+	_assert(_label_text(hud, "GoldLabel") == "Gold: 10", "HUD should not refresh before interval elapses")
+	_assert(_label_text(hud, "ScoreLabel") == "Score: 20", "HUD score should remain stale before interval elapses")
+
+	hud._process(0.16)
+	_assert(_label_text(hud, "GoldLabel") == "Gold: 99", "HUD should refresh gold after interval elapses")
+	_assert(_label_text(hud, "ScoreLabel") == "Score: 123", "HUD should refresh score after interval elapses")
+
+	root.queue_free()
+	await _tree.process_frame
+
+
 func _test_hud_order_status_falls_back_when_no_order_manager_exists() -> void:
 	_set_network_disconnected_baseline()
 
@@ -102,6 +187,79 @@ func _test_hud_order_status_falls_back_when_no_order_manager_exists() -> void:
 		_label_text(hud, "OrdersLabel") == "Orders: Pending N/A  Completed 7  Failed 3",
 		"HUD should keep pending as N/A when no order manager exists in scene tree"
 	)
+
+	root.queue_free()
+	await _tree.process_frame
+
+
+func _test_hud_order_status_updates_immediately_when_orders_are_cleared() -> void:
+	_set_network_disconnected_baseline()
+
+	var root := Node3D.new()
+	root.name = "HudOrderVisibilityRoot"
+	_tree.root.add_child(root)
+
+	var manager = ORDER_MANAGER_SCRIPT.new()
+	manager.name = "HudVisibilityOrders"
+	root.add_child(manager)
+	await _tree.process_frame
+
+	manager.clear_orders()
+	manager.create_order("normal", "A")
+	manager.create_order("fragile", "B")
+
+	var game_state := _game_state()
+	game_state.completed_orders = 3
+	game_state.failed_orders = 1
+
+	var hud = HUD_SCENE.instantiate()
+	root.add_child(hud)
+	await _tree.process_frame
+
+	hud._refresh_labels()
+	_assert(
+		_label_text(hud, "OrdersLabel") == "Orders: Pending 2  Completed 3  Failed 1",
+		"HUD should show initial pending count before clearing orders"
+	)
+
+	manager.clear_orders()
+
+	_assert(
+		_label_text(hud, "OrdersLabel") == "Orders: Pending 0  Completed 3  Failed 1",
+		"HUD should update pending order visibility immediately after order manager clear_orders signal"
+	)
+
+	root.queue_free()
+	await _tree.process_frame
+
+
+func _test_hud_delivery_feedback_prefers_explicit_game_state_feedback() -> void:
+	_set_network_disconnected_baseline()
+
+	var root := Node3D.new()
+	root.name = "HudExplicitDeliveryFeedbackRoot"
+	_tree.root.add_child(root)
+
+	var hud = HUD_SCENE.instantiate()
+	root.add_child(hud)
+	await _tree.process_frame
+
+	var game_state := _game_state()
+	_assert(game_state.has_method("set_delivery_feedback"), "GameState should expose set_delivery_feedback for HUD delivery feedback")
+	if not game_state.has_method("set_delivery_feedback"):
+		root.queue_free()
+		await _tree.process_frame
+		return
+
+	game_state.set_delivery_feedback("rejected", "Wrong destination.", "pkg_404", "")
+
+	_assert(
+		_label_text(hud, "DeliveryFeedbackLabel").begins_with("Delivery: Wrong destination."),
+		"HUD should prefer explicit delivery feedback message over inferred counter copy"
+	)
+
+	if game_state.has_method("clear_delivery_feedback"):
+		game_state.clear_delivery_feedback()
 
 	root.queue_free()
 	await _tree.process_frame
@@ -137,6 +295,49 @@ func _test_delivery_tracking_resets_when_session_requests_reset() -> void:
 
 	session._reset_delivery_zone_state()
 	_assert(zone._delivered_cache.is_empty(), "session reset_delivery_zone_state should clear delivery tracking cache")
+
+	session.queue_free()
+	await _tree.process_frame
+
+
+func _test_rejected_delivery_increments_failed_orders_and_respawns_package() -> void:
+	_set_network_disconnected_baseline()
+
+	var session = WAREHOUSE_SCENE.instantiate()
+	session.name = "SessionRejectedDeliveryAccounting"
+	_tree.root.add_child(session)
+	await _tree.process_frame
+	await _tree.process_frame
+
+	var package = session.get_node_or_null("Packages/package_1")
+	if package == null:
+		package = _find_first_package_in_session(session)
+	if package == null:
+		package = PACKAGE_SCENE.instantiate()
+		package.name = "package_rejected"
+		package.package_id = "pkg_rejected_001"
+		package.package_type = "normal"
+		session.get_node("Packages").add_child(package)
+		await _tree.process_frame
+
+	var previous_failed: int = int(_game_state().failed_orders)
+	var previous_completed: int = int(_game_state().completed_orders)
+	var previous_package_id := String(package.get("package_id"))
+
+	session._on_delivery_rejected(previous_package_id, "destination_mismatch")
+
+	_assert(
+		_game_state().failed_orders == previous_failed + 1,
+		"rejected delivery should increment failed_orders exactly once"
+	)
+	_assert(
+		_game_state().completed_orders == previous_completed,
+		"rejected delivery should not change completed_orders"
+	)
+	_assert(
+		String(package.get("package_id")) != previous_package_id,
+		"rejected delivery should respawn package with a new deterministic package_id"
+	)
 
 	session.queue_free()
 	await _tree.process_frame
