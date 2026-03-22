@@ -14,6 +14,7 @@ const LOCAL_COLOR := Color(0.329, 0.851, 0.557, 1.0)
 const REMOTE_COLOR := Color(0.847, 0.482, 0.443, 1.0)
 const WAITING_COLOR := Color(0.980, 0.792, 0.278, 1.0)
 const COOLDOWN_COLOR := Color(0.627, 0.667, 0.980, 1.0)
+const PLAYER_COUNT_REFRESH_INTERVAL := 0.25
 
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 var _last_input: Vector2 = Vector2.ZERO
@@ -24,6 +25,9 @@ var _waiting_for_network_action: bool = false
 var _last_holding_state: bool = false
 var _last_identity_cache: String = ""
 var _debug_material: StandardMaterial3D = null
+var _session_cache: Node = null
+var _cached_visible_players: int = 0
+var _player_count_refresh_left: float = 0.0
 
 @onready var _visual_root: MeshInstance3D = $VisualRoot
 @onready var _debug_label: Label3D = $DebugLabel
@@ -85,12 +89,14 @@ func _update_facing(delta: float) -> void:
 
 
 func _handle_interactions() -> void:
-	_held_package = _find_held_package_for_self()
+	_held_package = _resolve_held_package()
 	var session := _get_session()
 	if not _can_attempt_interaction():
 		return
 
+	var handled_grab_this_frame := false
 	if InputManager.is_grab_pressed():
+		handled_grab_this_frame = true
 		if _held_package != null:
 			if session != null and session.has_method("request_player_drop"):
 				if session.request_player_drop(self):
@@ -111,6 +117,9 @@ func _handle_interactions() -> void:
 				_try_grab_nearest_package()
 				_start_cooldown()
 
+	if handled_grab_this_frame:
+		return
+
 	if _held_package != null and InputManager.is_throw_pressed():
 		if session != null and session.has_method("request_player_throw"):
 			if session.request_player_throw(self, -basis.z.normalized() * throw_impulse_strength):
@@ -124,11 +133,17 @@ func _handle_interactions() -> void:
 
 
 func _try_grab_nearest_package() -> void:
+	var tree := get_tree()
+	if tree == null:
+		return
+
 	var nearest_package = null
 	var nearest_distance_squared := grab_range * grab_range
 
-	for node in get_tree().get_nodes_in_group("packages"):
-		if node == null or not node.has_method("is_held"):
+	for node in tree.get_nodes_in_group("packages"):
+		if node == null or not is_instance_valid(node) or not node.is_inside_tree():
+			continue
+		if not node.has_method("is_held") or not node.has_method("request_grab"):
 			continue
 		if node.is_held():
 			continue
@@ -140,41 +155,65 @@ func _try_grab_nearest_package() -> void:
 		nearest_package = node
 		nearest_distance_squared = distance_squared
 
-	if nearest_package != null and nearest_package.request_grab(self, multiplayer.get_unique_id()):
+	if nearest_package != null and nearest_package.request_grab(self, _local_requester_peer_id()):
 		_held_package = nearest_package
 
 
 func _drop_package() -> void:
-	if _held_package == null:
+	if _held_package == null or not is_instance_valid(_held_package):
 		return
 
-	_held_package.request_drop()
+	if _held_package.has_method("request_drop"):
+		_held_package.request_drop()
 	_held_package = null
 
 
 func _throw_package() -> void:
-	if _held_package == null:
+	if _held_package == null or not is_instance_valid(_held_package):
 		return
 
 	var throw_direction := -basis.z.normalized()
-	_held_package.request_drop(throw_direction * throw_impulse_strength)
+	if _held_package.has_method("request_drop"):
+		_held_package.request_drop(throw_direction * throw_impulse_strength)
 	_held_package = null
 
 
 func _get_session() -> Node:
+	if _session_cache != null and is_instance_valid(_session_cache) and _session_cache.is_inside_tree():
+		return _session_cache
+
 	var tree := get_tree()
 	if tree == null:
+		_session_cache = null
 		return null
-	return tree.get_first_node_in_group("warehouse_session")
+
+	for node in tree.get_nodes_in_group("warehouse_session"):
+		if node != null and is_instance_valid(node) and node.is_inside_tree():
+			_session_cache = node
+			return _session_cache
+
+	_session_cache = null
+	return null
 
 
 func _find_held_package_for_self():
-	for node in get_tree().get_nodes_in_group("packages"):
-		if node == null:
+	var tree := get_tree()
+	if tree == null:
+		return null
+
+	for node in tree.get_nodes_in_group("packages"):
+		if node == null or not is_instance_valid(node) or not node.is_inside_tree():
 			continue
 		if node.get("holder") == self:
 			return node
 	return null
+
+
+func _resolve_held_package():
+	if _held_package != null and is_instance_valid(_held_package) and _held_package.is_inside_tree():
+		if _held_package.get("holder") == self:
+			return _held_package
+	return _find_held_package_for_self()
 
 
 func _broadcast_state() -> void:
@@ -200,8 +239,10 @@ func _tick_runtime_state(delta: float) -> void:
 	_interaction_cooldown_left = max(0.0, _interaction_cooldown_left - delta)
 	if _waiting_for_network_action:
 		_request_timeout_left = max(0.0, _request_timeout_left - delta)
+	_update_visible_player_cache(delta)
 
-	var is_holding_now := _find_held_package_for_self() != null
+	_held_package = _resolve_held_package()
+	var is_holding_now := _held_package != null
 	if is_holding_now != _last_holding_state:
 		_waiting_for_network_action = false
 		_request_timeout_left = 0.0
@@ -227,13 +268,61 @@ func _start_cooldown() -> void:
 
 func _mark_network_request_sent() -> void:
 	_start_cooldown()
+	if not _has_network_peer():
+		_waiting_for_network_action = false
+		_request_timeout_left = 0.0
+		return
 	_waiting_for_network_action = true
 	_request_timeout_left = network_request_timeout
 
 
+func _update_visible_player_cache(delta: float) -> void:
+	_player_count_refresh_left = max(0.0, _player_count_refresh_left - delta)
+	if _player_count_refresh_left > 0.0:
+		return
+
+	_cached_visible_players = _compute_visible_player_count()
+	_player_count_refresh_left = PLAYER_COUNT_REFRESH_INTERVAL
+
+
+func _compute_visible_player_count() -> int:
+	var tree := get_tree()
+	if tree == null:
+		return 0
+
+	var count := 0
+	for node in tree.get_nodes_in_group("players"):
+		if node is Node3D and node.is_inside_tree():
+			count += 1
+	return count
+
+
+func _has_network_peer() -> bool:
+	return multiplayer.multiplayer_peer != null
+
+
+func _is_local_authority_safe() -> bool:
+	if not _has_network_peer():
+		return true
+	return is_multiplayer_authority()
+
+
+func _display_peer_id() -> int:
+	var authority_id := get_multiplayer_authority()
+	if authority_id > 0:
+		return authority_id
+	return 1
+
+
+func _local_requester_peer_id() -> int:
+	if _has_network_peer():
+		return multiplayer.get_unique_id()
+	return _display_peer_id()
+
+
 func _update_identity_visuals() -> void:
-	var local_role := is_multiplayer_authority()
-	var peer_id := get_multiplayer_authority()
+	var local_role := _is_local_authority_safe()
+	var peer_id := _display_peer_id()
 	var identity := "%s:%d" % ["LOCAL" if local_role else "REMOTE", peer_id]
 	if identity == _last_identity_cache:
 		return
@@ -255,12 +344,12 @@ func _update_identity_visuals() -> void:
 
 
 func _update_runtime_status_label() -> void:
-	var local_role := is_multiplayer_authority()
-	var peer_id := get_multiplayer_authority()
+	var local_role := _is_local_authority_safe()
+	var peer_id := _display_peer_id()
 	var role_text := "LOCAL" if local_role else "REMOTE"
 	var status_text := "READY"
 	var label_color := LOCAL_COLOR if local_role else REMOTE_COLOR
-	var visible_players := _visible_player_count()
+	var visible_players := _cached_visible_players
 	var roster_text := "N%d/%d" % [visible_players, expected_player_count]
 
 	if _waiting_for_network_action:
@@ -278,11 +367,3 @@ func _update_runtime_status_label() -> void:
 
 	_debug_label.text = "P%d %s [%s] %s" % [peer_id, role_text, status_text, roster_text]
 	_debug_label.modulate = label_color
-
-
-func _visible_player_count() -> int:
-	var count := 0
-	for node in get_tree().get_nodes_in_group("players"):
-		if node is Node3D and node.is_inside_tree():
-			count += 1
-	return count

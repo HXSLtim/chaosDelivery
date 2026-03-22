@@ -26,6 +26,7 @@ func _ready() -> void:
 func _physics_process(_delta: float) -> void:
 	if _package == null:
 		return
+	_recover_if_holder_stale()
 	if not _has_valid_holder():
 		return
 	if _hold_target == null or not is_instance_valid(_hold_target):
@@ -40,6 +41,8 @@ func _physics_process(_delta: float) -> void:
 
 func can_grab(by: Node3D, requester_peer_id: int = 0, max_distance: float = -1.0) -> bool:
 	if _package == null or by == null:
+		return false
+	if not is_instance_valid(by) or not by.is_inside_tree():
 		return false
 	_recover_if_holder_stale()
 	if _has_valid_holder():
@@ -64,6 +67,8 @@ func get_owner_peer_id() -> int:
 
 
 func get_holder_node() -> Node3D:
+	if not _has_valid_holder():
+		return null
 	return holder
 
 
@@ -90,6 +95,8 @@ func try_drop(impulse: Vector3 = Vector3.ZERO) -> bool:
 
 func force_set_holder(by: Node3D, new_owner_peer_id: int = 0) -> bool:
 	if _package == null or by == null:
+		return false
+	if not is_instance_valid(by) or not by.is_inside_tree():
 		return false
 	_recover_if_holder_stale()
 	if _has_valid_holder() and holder == by:
