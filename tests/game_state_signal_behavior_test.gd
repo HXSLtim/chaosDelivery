@@ -17,6 +17,7 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_game_state_emits_delivery_feedback_signal()
 	await _test_hud_refreshes_immediately_when_game_state_changes()
 	await _test_session_spawn_emits_local_player_profile_signal()
+	await _test_session_profile_signal_uses_stable_slot_labels_for_remote_peers()
 
 	_restore_game_state()
 	return _failures
@@ -158,6 +159,45 @@ func _test_session_spawn_emits_local_player_profile_signal() -> void:
 	_assert(not profile_events.is_empty(), "warehouse session spawn should emit local player profile change")
 	if not profile_events.is_empty():
 		_assert(profile_events[-1] == {"id": 1, "name": "Player 1"}, "session profile signal should describe the spawned offline player")
+
+	if event_bus.local_player_profile_changed.is_connected(on_profile):
+		event_bus.local_player_profile_changed.disconnect(on_profile)
+
+	session.queue_free()
+	await _tree.process_frame
+
+
+func _test_session_profile_signal_uses_stable_slot_labels_for_remote_peers() -> void:
+	_reset_network_baseline()
+
+	var event_bus := _event_bus()
+	var network_manager := _tree.root.get_node_or_null("NetworkManager")
+	_assert(event_bus != null and network_manager != null, "EventBus and NetworkManager should exist for stable slot profile signal test")
+	if event_bus == null or network_manager == null:
+		return
+
+	network_manager.connected_peers = {
+		1: true,
+		1096654874: true
+	}
+
+	var profile_events: Array[Dictionary] = []
+	var on_profile := func(player_id: int, player_name: String) -> void:
+		profile_events.append({"id": player_id, "name": player_name})
+	event_bus.local_player_profile_changed.connect(on_profile)
+
+	var session = WAREHOUSE_SCENE.instantiate()
+	session.name = "SessionStableSlotProfileSignal"
+	_tree.root.add_child(session)
+	await _tree.process_frame
+	await _tree.process_frame
+
+	session._update_local_player_profile(1096654874)
+
+	_assert(
+		not profile_events.is_empty() and profile_events[-1] == {"id": 2, "name": "Player 2"},
+		"session profile signal should map large remote peer ids to stable slot labels"
+	)
 
 	if event_bus.local_player_profile_changed.is_connected(on_profile):
 		event_bus.local_player_profile_changed.disconnect(on_profile)

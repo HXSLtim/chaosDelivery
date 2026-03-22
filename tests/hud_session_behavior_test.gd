@@ -25,6 +25,10 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_hud_delivery_feedback_prefers_explicit_game_state_feedback()
 	await _test_delivery_tracking_resets_when_session_requests_reset()
 	await _test_rejected_delivery_increments_failed_orders_and_respawns_package()
+	await _test_session_spawns_offline_world_with_default_offline_peer()
+	await _test_spawn_positions_use_peer_roster_slots_instead_of_raw_peer_ids()
+	await _test_local_player_profile_uses_peer_slot_labels()
+	await _test_warehouse_camera_frames_spawn_area()
 	await _test_apply_order_state_local_filters_and_copies_snapshot()
 
 	_restore_global_state()
@@ -337,6 +341,107 @@ func _test_rejected_delivery_increments_failed_orders_and_respawns_package() -> 
 	_assert(
 		String(package.get("package_id")) != previous_package_id,
 		"rejected delivery should respawn package with a new deterministic package_id"
+	)
+
+	session.queue_free()
+	await _tree.process_frame
+
+
+func _test_session_spawns_offline_world_with_default_offline_peer() -> void:
+	_set_network_disconnected_baseline()
+
+	var session = WAREHOUSE_SCENE.instantiate()
+	session.name = "SessionOfflineSpawnDefaultPeer"
+	_tree.root.add_child(session)
+	await _tree.process_frame
+	await _tree.process_frame
+
+	var players := session.get_node_or_null("Players")
+	var packages := session.get_node_or_null("Packages")
+	_assert(players != null and players.get_child_count() == 1, "warehouse session should spawn one offline player on startup")
+	_assert(packages != null and packages.get_child_count() == 1, "warehouse session should spawn one offline package on startup")
+
+	session.queue_free()
+	await _tree.process_frame
+
+
+func _test_spawn_positions_use_peer_roster_slots_instead_of_raw_peer_ids() -> void:
+	_set_network_disconnected_baseline()
+
+	var session = WAREHOUSE_SCENE.instantiate()
+	session.name = "SessionPeerRosterSpawnSlots"
+	_tree.root.add_child(session)
+	await _tree.process_frame
+	await _tree.process_frame
+
+	var network_manager := _network_manager()
+	network_manager.connected_peers = {
+		1: true,
+		743291551: true
+	}
+
+	var second_spawn: Vector3 = session._player_spawn_position_for_peer(743291551)
+	var player_spawn := session.get_node("SpawnPoints/PlayerSpawn") as Marker3D
+	var expected_spawn := player_spawn.global_position + Vector3(1.6, 0.0, 0.0)
+	_assert(
+		second_spawn.distance_to(expected_spawn) < 0.01,
+		"player spawn positions should use roster slot order instead of raw peer ids"
+	)
+
+	session.queue_free()
+	await _tree.process_frame
+
+
+func _test_local_player_profile_uses_peer_slot_labels() -> void:
+	_set_network_disconnected_baseline()
+
+	var session = WAREHOUSE_SCENE.instantiate()
+	session.name = "SessionLocalProfileSlotLabels"
+	_tree.root.add_child(session)
+	await _tree.process_frame
+	await _tree.process_frame
+
+	var network_manager := _network_manager()
+	network_manager.connected_peers = {
+		1: true,
+		1096654874: true
+	}
+
+	session._update_local_player_profile(1096654874)
+
+	var game_state := _game_state()
+	_assert(game_state.local_player_id == 2, "local player id should use stable peer slot index")
+	_assert(game_state.local_player_name == "Player 2", "local player name should use stable peer slot label")
+
+	session.queue_free()
+	await _tree.process_frame
+
+
+func _test_warehouse_camera_frames_spawn_area() -> void:
+	_set_network_disconnected_baseline()
+
+	var session = WAREHOUSE_SCENE.instantiate()
+	session.name = "WarehouseCameraFraming"
+	_tree.root.add_child(session)
+	await _tree.process_frame
+	await _tree.process_frame
+
+	var camera := session.get_node_or_null("Camera3D") as Camera3D
+	_assert(camera != null, "warehouse test scene should expose a camera")
+	if camera == null:
+		session.queue_free()
+		await _tree.process_frame
+		return
+
+	var ground_target := Vector3(0.0, 1.0, 0.0)
+	var camera_forward := -camera.global_basis.z.normalized()
+	_assert(camera_forward.y < -0.05, "warehouse camera should tilt downward toward the spawn area")
+
+	var reach_to_target_height := (ground_target.y - camera.global_position.y) / camera_forward.y
+	var ground_focus_point := camera.global_position + camera_forward * reach_to_target_height
+	_assert(
+		ground_focus_point.distance_to(ground_target) < 8.0,
+		"warehouse camera should frame the player/package spawn area near the scene origin"
 	)
 
 	session.queue_free()

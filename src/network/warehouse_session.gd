@@ -1,5 +1,6 @@
 extends Node3D
 
+const RuntimeLog := preload("res://src/utils/runtime_log.gd")
 const PLAYER_SCENE := preload("res://scenes/entities/player.tscn")
 const PACKAGE_SCENE := preload("res://scenes/entities/package.tscn")
 const LOCALHOST_ADDRESS := "127.0.0.1"
@@ -32,6 +33,9 @@ var _session_transition: SessionTransition = SessionTransition.NONE
 
 func _ready() -> void:
 	add_to_group("warehouse_session")
+	RuntimeLog.info("Session", "warehouse session ready", {
+		"node": name
+	})
 	EventBus.player_joined.connect(_on_player_joined)
 	EventBus.player_left.connect(_on_player_left)
 	EventBus.network_state_changed.connect(_on_network_state_changed)
@@ -107,13 +111,23 @@ func request_player_throw(player: Node3D, impulse: Vector3) -> bool:
 
 func _host_local_session() -> void:
 	if NetworkManager.is_connected:
+		RuntimeLog.info("Session", "host skipped: already connected", {})
 		return
 	if _network_action_cooldown > 0.0:
+		RuntimeLog.info("Session", "host skipped: cooldown active", {
+			"cooldown_left": _network_action_cooldown
+		})
 		return
 	if _is_network_transition_in_progress():
+		RuntimeLog.info("Session", "host skipped: transition in progress", {
+			"transition": _session_transition
+		})
 		return
 
 	_session_transition = SessionTransition.HOSTING
+	RuntimeLog.info("Session", "hosting local session", {
+		"transition": _session_transition
+	})
 	_clear_world()
 	_configure_delivery_zone(false)
 	var err := NetworkManager.host_game()
@@ -127,13 +141,24 @@ func _host_local_session() -> void:
 
 func _join_local_session() -> void:
 	if NetworkManager.is_connected:
+		RuntimeLog.info("Session", "join skipped: already connected", {})
 		return
 	if _network_action_cooldown > 0.0:
+		RuntimeLog.info("Session", "join skipped: cooldown active", {
+			"cooldown_left": _network_action_cooldown
+		})
 		return
 	if _is_network_transition_in_progress():
+		RuntimeLog.info("Session", "join skipped: transition in progress", {
+			"transition": _session_transition
+		})
 		return
 
 	_session_transition = SessionTransition.JOINING
+	RuntimeLog.info("Session", "joining local session", {
+		"address": LOCALHOST_ADDRESS,
+		"transition": _session_transition
+	})
 	_clear_world()
 	_configure_delivery_zone(false)
 	var err := NetworkManager.join_game(LOCALHOST_ADDRESS)
@@ -146,6 +171,10 @@ func _join_local_session() -> void:
 
 func _leave_session() -> void:
 	_session_transition = SessionTransition.LEAVING
+	RuntimeLog.info("Session", "leave requested", {
+		"connected": NetworkManager.is_connected,
+		"has_peer": _has_active_network_peer()
+	})
 	if NetworkManager.is_connected or _has_active_network_peer():
 		NetworkManager.leave_game()
 	else:
@@ -160,12 +189,19 @@ func _on_player_joined(peer_id: int) -> void:
 		return
 
 	var spawn_position := _player_spawn_position_for_peer(peer_id)
+	RuntimeLog.info("Session", "player joined", {
+		"peer_id": peer_id,
+		"spawn_position": spawn_position
+	})
 	_spawn_player_local(peer_id, spawn_position)
 	_spawn_player_for_peer.rpc(peer_id, spawn_position)
 	_sync_world_to_peer(peer_id)
 
 
 func _on_player_left(peer_id: int) -> void:
+	RuntimeLog.info("Session", "player left", {
+		"peer_id": peer_id
+	})
 	var player := _find_player_by_peer_id(peer_id)
 	if player != null:
 		player.queue_free()
@@ -173,6 +209,11 @@ func _on_player_left(peer_id: int) -> void:
 
 func _on_network_state_changed(connected: bool, host: bool) -> void:
 	_session_transition = SessionTransition.NONE
+	RuntimeLog.info("Session", "network state changed", {
+		"connected": connected,
+		"host": host,
+		"peer_id": multiplayer.get_unique_id() if NetworkManager.has_active_peer() else -1
+	})
 	_configure_delivery_zone(not connected or host)
 
 	if not connected:
@@ -184,6 +225,9 @@ func _on_network_state_changed(connected: bool, host: bool) -> void:
 	else:
 		_clear_world()
 		_update_local_player_profile(multiplayer.get_unique_id())
+		RuntimeLog.info("Session", "building client world", {
+			"local_peer_id": multiplayer.get_unique_id()
+		})
 		if multiplayer.get_unique_id() != 1:
 			_spawn_player_local(1, _player_spawn_position_for_peer(1))
 		_spawn_player_local(multiplayer.get_unique_id(), _player_spawn_position_for_peer(multiplayer.get_unique_id()))
@@ -195,6 +239,10 @@ func _on_package_delivered(package_id: String, _order_id: String) -> void:
 	if NetworkManager.is_connected and not NetworkManager.is_host:
 		return
 
+	RuntimeLog.info("Session", "package delivered", {
+		"package_id": package_id,
+		"order_id": _order_id
+	})
 	_increment_completed_orders(1)
 	GameState.add_gold(DELIVERY_REWARD_GOLD)
 	GameState.add_score(DELIVERY_REWARD_SCORE)
@@ -213,6 +261,10 @@ func _on_delivery_rejected(package_id: String, _reason: String) -> void:
 	if NetworkManager.is_connected and not NetworkManager.is_host:
 		return
 
+	RuntimeLog.info("Session", "delivery rejected", {
+		"package_id": package_id,
+		"reason": _reason
+	})
 	_increment_failed_orders(1)
 	GameState.set_delivery_feedback("rejected", _delivery_rejection_message(_reason), package_id, "")
 
@@ -225,8 +277,13 @@ func _on_delivery_rejected(package_id: String, _reason: String) -> void:
 
 func _spawn_offline_world() -> void:
 	if NetworkManager.is_connected or _has_active_network_peer():
+		RuntimeLog.info("Session", "spawn_offline_world skipped: active network peer", {
+			"connected": NetworkManager.is_connected,
+			"has_peer": _has_active_network_peer()
+		})
 		return
 
+	RuntimeLog.info("Session", "spawning offline world", {})
 	_clear_world()
 	_reset_delivery_zone_state()
 	_next_package_id = 1
@@ -263,7 +320,7 @@ func _delivery_rejection_message(reason: String) -> String:
 
 
 func _has_active_network_peer() -> bool:
-	return NetworkManager.multiplayer.multiplayer_peer != null
+	return NetworkManager.has_active_peer()
 
 
 func _is_network_transition_in_progress() -> bool:
@@ -273,6 +330,7 @@ func _is_network_transition_in_progress() -> bool:
 
 
 func _build_host_world() -> void:
+	RuntimeLog.info("Session", "building host world", {})
 	_clear_world()
 	_reset_delivery_zone_state()
 	_next_package_id = 1
@@ -309,6 +367,10 @@ func _spawn_player_local(peer_id: int, spawn_position: Vector3) -> void:
 	var existing_player := _find_player_by_peer_id(peer_id)
 	if existing_player != null:
 		existing_player.global_position = spawn_position
+		RuntimeLog.info("Session", "repositioned existing player", {
+			"peer_id": peer_id,
+			"spawn_position": spawn_position
+		})
 		return
 
 	var node_name := str(peer_id)
@@ -318,6 +380,14 @@ func _spawn_player_local(peer_id: int, spawn_position: Vector3) -> void:
 	_players.add_child(player, true)
 	player.global_position = spawn_position
 	_apply_player_debug_tint(player, peer_id)
+	RuntimeLog.info("Session", "spawned player", {
+		"peer_id": peer_id,
+		"node": node_name,
+		"spawn_position": spawn_position,
+		"authority": player.get_multiplayer_authority(),
+		"local": player.is_multiplayer_authority(),
+		"local_peer_id": multiplayer.get_unique_id() if NetworkManager.has_active_peer() else -1
+	})
 
 
 func _spawn_package_local(package_name: String, spawn_position: Vector3, package_id: String = "") -> Node3D:
@@ -327,16 +397,28 @@ func _spawn_package_local(package_name: String, spawn_position: Vector3, package
 		package = PACKAGE_SCENE.instantiate()
 		package.name = package_name
 		_packages.add_child(package, true)
+		RuntimeLog.info("Session", "instantiated package", {
+			"package_name": package_name
+		})
 
 	package.global_position = spawn_position
 	package.global_basis = Basis.IDENTITY
 	if package.has_method("set"):
 		package.set("package_id", package_id if not package_id.is_empty() else package_name)
 		package.set("package_type", DEFAULT_PACKAGE_TYPE)
+	RuntimeLog.info("Session", "spawned package", {
+		"package_id": package_id if not package_id.is_empty() else package_name,
+		"package_name": package_name,
+		"spawn_position": spawn_position
+	})
 	return package
 
 
 func _clear_world() -> void:
+	RuntimeLog.info("Session", "clearing world", {
+		"players": _get_all_players().size(),
+		"packages": _get_all_packages().size()
+	})
 	for child in _get_all_players():
 		if child != null and is_instance_valid(child):
 			child.free()
@@ -347,18 +429,26 @@ func _clear_world() -> void:
 
 
 func _update_local_player_profile(peer_id: int) -> void:
-	var player_name := "Player %d" % peer_id
+	var player_slot := 1
+	if NetworkManager != null and NetworkManager.has_method("get_peer_slot"):
+		player_slot = int(NetworkManager.get_peer_slot(peer_id))
+	var player_name := "Player %d" % player_slot
+	RuntimeLog.info("Session", "updating local player profile", {
+		"peer_id": peer_id,
+		"player_slot": player_slot,
+		"player_name": player_name
+	})
 	if GameState.has_method("set_local_player_profile"):
-		GameState.set_local_player_profile(peer_id, player_name)
+		GameState.set_local_player_profile(player_slot, player_name)
 		return
 	if GameState.has_method("update_local_player_profile"):
-		GameState.update_local_player_profile(peer_id, player_name)
+		GameState.update_local_player_profile(player_slot, player_name)
 		return
 	if GameState.has_method("set_local_player_identity"):
-		GameState.set_local_player_identity(peer_id, player_name)
+		GameState.set_local_player_identity(player_slot, player_name)
 		return
 
-	GameState.set("local_player_id", peer_id)
+	GameState.set("local_player_id", player_slot)
 	GameState.set("local_player_name", player_name)
 
 
@@ -428,8 +518,28 @@ func _apply_player_debug_tint(player: Node, peer_id: int) -> void:
 
 
 func _player_spawn_position_for_peer(peer_id: int) -> Vector3:
-	var spawn_index := maxi(0, peer_id - 1)
+	var spawn_index := _player_spawn_slot_for_peer(peer_id)
 	return _player_spawn.global_position + Vector3(spawn_index * 1.6, 0.0, 0.0)
+
+
+func _player_spawn_slot_for_peer(peer_id: int) -> int:
+	var connected_peer_ids: Array[int] = []
+	if NetworkManager != null and NetworkManager.has_method("get_connected_peer_ids"):
+		var peer_ids_value: Variant = NetworkManager.get_connected_peer_ids()
+		if peer_ids_value is Array:
+			for value in peer_ids_value:
+				if value is int:
+					connected_peer_ids.append(int(value))
+
+	if connected_peer_ids.is_empty():
+		return maxi(0, peer_id - 1) if peer_id > 0 and peer_id <= 4 else 0
+
+	if not connected_peer_ids.has(peer_id):
+		connected_peer_ids.append(peer_id)
+	connected_peer_ids.sort()
+
+	var slot_index := connected_peer_ids.find(peer_id)
+	return maxi(slot_index, 0)
 
 
 func _seed_orders() -> void:

@@ -1,5 +1,7 @@
 extends CharacterBody3D
 
+const RuntimeLog := preload("res://src/utils/runtime_log.gd")
+
 @export var move_speed: float = 4.5
 @export var acceleration: float = 18.0
 @export var deceleration: float = 24.0
@@ -36,7 +38,7 @@ var _player_count_refresh_left: float = 0.0
 func _physics_process(delta: float) -> void:
 	_tick_runtime_state(delta)
 
-	if multiplayer.multiplayer_peer != null and not is_multiplayer_authority():
+	if _has_network_peer() and not is_multiplayer_authority():
 		return
 
 	var input_vector := _read_move_input()
@@ -61,6 +63,13 @@ func _physics_process(delta: float) -> void:
 
 func _ready() -> void:
 	add_to_group("players")
+	RuntimeLog.info("Player", "ready", {
+		"node": name,
+		"authority": get_multiplayer_authority(),
+		"has_network_peer": _has_network_peer(),
+		"local": _is_local_authority_safe(),
+		"unique_id": multiplayer.get_unique_id() if _has_network_peer() else -1
+	})
 
 
 func _read_move_input() -> Vector2:
@@ -217,7 +226,7 @@ func _resolve_held_package():
 
 
 func _broadcast_state() -> void:
-	if multiplayer.multiplayer_peer == null:
+	if not _has_network_peer():
 		return
 
 	_sync_remote_state.rpc(global_position, basis, velocity)
@@ -298,7 +307,10 @@ func _compute_visible_player_count() -> int:
 
 
 func _has_network_peer() -> bool:
-	return multiplayer.multiplayer_peer != null
+	var peer := multiplayer.multiplayer_peer
+	if peer == null:
+		return false
+	return not peer is OfflineMultiplayerPeer
 
 
 func _is_local_authority_safe() -> bool:
@@ -309,9 +321,14 @@ func _is_local_authority_safe() -> bool:
 
 func _display_peer_id() -> int:
 	var authority_id := get_multiplayer_authority()
-	if authority_id > 0:
+	if authority_id <= 0:
+		return 1
+	if not _has_network_peer():
 		return authority_id
-	return 1
+	var network_manager := get_node_or_null("/root/NetworkManager")
+	if network_manager != null and network_manager.has_method("get_peer_slot"):
+		return int(network_manager.get_peer_slot(authority_id))
+	return authority_id
 
 
 func _local_requester_peer_id() -> int:

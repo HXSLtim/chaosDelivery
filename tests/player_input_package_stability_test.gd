@@ -15,6 +15,7 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_player_grab_selects_nearest_package_within_range()
 	await _test_player_grab_ignores_packages_out_of_range()
 	await _test_same_frame_grab_and_throw_input_drops_without_throwing()
+	await _test_player_runtime_labels_use_stable_peer_slots_when_networked()
 
 	return _failures
 
@@ -112,6 +113,45 @@ func _test_same_frame_grab_and_throw_input_drops_without_throwing() -> void:
 
 	world.queue_free()
 	await _tree.process_frame
+
+
+func _test_player_runtime_labels_use_stable_peer_slots_when_networked() -> void:
+	var network_manager := _tree.root.get_node_or_null("NetworkManager")
+	_assert(network_manager != null, "NetworkManager should exist for player runtime label slot test")
+	if network_manager == null:
+		return
+
+	network_manager.leave_game()
+	network_manager.connected_peers = {}
+	_assert(network_manager.host_game() == OK, "setup should host a local session for networked label test")
+	network_manager.connected_peers = {
+		1: true,
+		1096654874: true
+	}
+
+	var world := _make_world("NetworkedPlayerRuntimeLabels")
+	var local_player = PLAYER_SCENE.instantiate()
+	local_player.name = "1"
+	local_player.set_multiplayer_authority(1)
+	world.add_child(local_player)
+
+	var remote_player = PLAYER_SCENE.instantiate()
+	remote_player.name = "1096654874"
+	remote_player.set_multiplayer_authority(1096654874)
+	world.add_child(remote_player)
+	await _tree.process_frame
+
+	local_player._physics_process(1.0 / 60.0)
+	remote_player._physics_process(1.0 / 60.0)
+
+	var local_label := local_player.get_node("DebugLabel") as Label3D
+	var remote_label := remote_player.get_node("DebugLabel") as Label3D
+	_assert(local_label != null and local_label.text.begins_with("P1 LOCAL"), "local player runtime label should use slot P1 when hosting")
+	_assert(remote_label != null and remote_label.text.begins_with("P2 REMOTE"), "remote player runtime label should use slot P2 for the first client")
+
+	world.queue_free()
+	await _tree.process_frame
+	network_manager.leave_game()
 
 
 func _make_world(name: String) -> Node3D:

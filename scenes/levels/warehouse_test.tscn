@@ -64,7 +64,8 @@ spot_angle = 38.0
 shadow_enabled = true
 
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.913545, 0.406737, 0, -0.406737, 0.913545, 0, 14, 12)
+position = Vector3(0, 11, 10)
+rotation_degrees = Vector3(-45, 0, 0)
 current = true
 
 [node name="Floor" type="StaticBody3D" parent="."]

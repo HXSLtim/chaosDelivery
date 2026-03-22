@@ -10,6 +10,9 @@ func run(tree: SceneTree) -> Array[String]:
 	_failures.clear()
 	_capture_network_state()
 
+	_test_has_active_peer_ignores_default_offline_peer()
+	_test_peer_slots_are_stable_for_large_peer_ids()
+	_test_peer_slots_fallback_safely_when_roster_is_empty()
 	_test_apply_state_updates_flags_and_clears_peers()
 	_test_clear_connection_state_respects_host_reset_parameter()
 
@@ -56,6 +59,34 @@ func _test_clear_connection_state_respects_host_reset_parameter() -> void:
 
 	network_manager._clear_connection_state(true, false, OK)
 	_assert(not network_manager.is_host, "_clear_connection_state(reset_host=true) should clear host role")
+
+
+func _test_has_active_peer_ignores_default_offline_peer() -> void:
+	var network_manager := _network_manager()
+	network_manager._apply_state(network_manager.ConnectionState.DISCONNECTED, false, OK, true)
+	_assert(
+		not network_manager.has_active_peer(),
+		"has_active_peer should ignore the default OfflineMultiplayerPeer so offline world spawning is not blocked"
+	)
+
+
+func _test_peer_slots_are_stable_for_large_peer_ids() -> void:
+	var network_manager := _network_manager()
+	network_manager.connected_peers = {
+		1: true,
+		1096654874: true,
+		2147483640: true
+	}
+	_assert(network_manager.get_peer_slot(1) == 1, "host should keep slot P1")
+	_assert(network_manager.get_peer_slot(1096654874) == 2, "first remote peer should map to slot P2")
+	_assert(network_manager.get_peer_slot(2147483640) == 3, "second remote peer should map to slot P3")
+
+
+func _test_peer_slots_fallback_safely_when_roster_is_empty() -> void:
+	var network_manager := _network_manager()
+	network_manager.connected_peers = {}
+	_assert(network_manager.get_peer_slot(1) == 1, "host should default to slot P1 when roster is empty")
+	_assert(network_manager.get_peer_slot(99) == 2, "unknown remote peer should default to slot P2 when roster is empty")
 
 
 func _capture_network_state() -> void:
