@@ -1,17 +1,11 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://src/entities/package.gd" id="1_pkg_script"]
 [ext_resource type="Script" path="res://src/components/grabbable_component.gd" id="2_grab_script"]
+[ext_resource type="PackedScene" path="res://assets/models/delivery_box_low.glb" id="3_box_model"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_collider"]
 size = Vector3(0.6, 0.6, 0.6)
-
-[sub_resource type="BoxMesh" id="BoxMesh_visual"]
-size = Vector3(0.6, 0.6, 0.6)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_package"]
-albedo_color = Color(0.807843, 0.392157, 0.258824, 1)
-roughness = 0.82
 
 [node name="Package" type="RigidBody3D"]
 script = ExtResource("1_pkg_script")
@@ -24,9 +18,8 @@ shape = SubResource("BoxShape3D_collider")
 
 [node name="VisualRoot" type="Node3D" parent="."]
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="VisualRoot"]
-mesh = SubResource("BoxMesh_visual")
-surface_material_override/0 = SubResource("StandardMaterial3D_package")
+[node name="DeliveryBoxModel" parent="VisualRoot" instance=ExtResource("3_box_model")]
+transform = Transform3D(0.45, 0, 0, 0, 0.45, 0, 0, 0, 0.45, 0, -0.02, 0)
 
 [node name="GrabbableComponent" type="Node" parent="."]
 script = ExtResource("2_grab_script")

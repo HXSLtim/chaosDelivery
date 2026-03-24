@@ -369,6 +369,12 @@ func _resolve_order_manager() -> Node:
 func _network_local_peer_id(network_manager: Node) -> int:
 	if network_manager == null:
 		return -1
+	if network_manager.has_method("get_local_peer_slot"):
+		var local_slot_value: Variant = network_manager.call("get_local_peer_slot")
+		if local_slot_value is int:
+			return int(local_slot_value)
+		if local_slot_value is float:
+			return int(local_slot_value)
 	var multiplayer_api: Variant = _get_multiplayer_api(network_manager)
 	if multiplayer_api == null:
 		return -1

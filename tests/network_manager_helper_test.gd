@@ -13,6 +13,8 @@ func run(tree: SceneTree) -> Array[String]:
 	_test_has_active_peer_ignores_default_offline_peer()
 	_test_peer_slots_are_stable_for_large_peer_ids()
 	_test_peer_slots_fallback_safely_when_roster_is_empty()
+	_test_peer_slots_ignore_insertion_order()
+	_test_get_local_peer_slot_returns_slot_one_while_hosting()
 	_test_apply_state_updates_flags_and_clears_peers()
 	_test_clear_connection_state_respects_host_reset_parameter()
 
@@ -87,6 +89,30 @@ func _test_peer_slots_fallback_safely_when_roster_is_empty() -> void:
 	network_manager.connected_peers = {}
 	_assert(network_manager.get_peer_slot(1) == 1, "host should default to slot P1 when roster is empty")
 	_assert(network_manager.get_peer_slot(99) == 2, "unknown remote peer should default to slot P2 when roster is empty")
+
+
+func _test_peer_slots_ignore_insertion_order() -> void:
+	var network_manager := _network_manager()
+	network_manager.connected_peers = {
+		2147483640: true,
+		1: true,
+		1096654874: true
+	}
+	_assert(network_manager.get_peer_slot(1) == 1, "peer slots should keep host at P1 regardless of insertion order")
+	_assert(network_manager.get_peer_slot(1096654874) == 2, "peer slots should sort peer ids before assigning P2")
+	_assert(network_manager.get_peer_slot(2147483640) == 3, "peer slots should sort peer ids before assigning P3")
+
+
+func _test_get_local_peer_slot_returns_slot_one_while_hosting() -> void:
+	var network_manager := _network_manager()
+	network_manager.leave_game()
+	_assert(network_manager.host_game() == OK, "setup should allow hosting for local peer slot test")
+	network_manager.connected_peers = {
+		1: true,
+		1096654874: true
+	}
+	_assert(network_manager.get_local_peer_slot() == 1, "host should always report local slot P1 while hosting")
+	network_manager.leave_game()
 
 
 func _capture_network_state() -> void:

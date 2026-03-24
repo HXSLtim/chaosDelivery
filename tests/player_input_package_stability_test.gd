@@ -15,6 +15,7 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_player_grab_selects_nearest_package_within_range()
 	await _test_player_grab_ignores_packages_out_of_range()
 	await _test_same_frame_grab_and_throw_input_drops_without_throwing()
+	await _test_player_display_peer_id_maps_large_authority_to_stable_slot()
 	await _test_player_runtime_labels_use_stable_peer_slots_when_networked()
 
 	return _failures
@@ -113,6 +114,33 @@ func _test_same_frame_grab_and_throw_input_drops_without_throwing() -> void:
 
 	world.queue_free()
 	await _tree.process_frame
+
+
+func _test_player_display_peer_id_maps_large_authority_to_stable_slot() -> void:
+	var network_manager := _tree.root.get_node_or_null("NetworkManager")
+	_assert(network_manager != null, "NetworkManager should exist for player display peer slot test")
+	if network_manager == null:
+		return
+
+	network_manager.leave_game()
+	_assert(network_manager.host_game() == OK, "setup should host a local session for player display peer slot test")
+	network_manager.connected_peers = {
+		1: true,
+		1096654874: true
+	}
+
+	var world := _make_world("PlayerDisplayPeerSlots")
+	var remote_player = PLAYER_SCENE.instantiate()
+	remote_player.name = "1096654874"
+	remote_player.set_multiplayer_authority(1096654874)
+	world.add_child(remote_player)
+	await _tree.process_frame
+
+	_assert(remote_player._display_peer_id() == 2, "player display peer id should map large authority ids to stable slot numbers")
+
+	world.queue_free()
+	await _tree.process_frame
+	network_manager.leave_game()
 
 
 func _test_player_runtime_labels_use_stable_peer_slots_when_networked() -> void:

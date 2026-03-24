@@ -65,6 +65,12 @@ func get_peer_slot(peer_id: int) -> int:
 		return 1
 	return slot_index + 1
 
+
+func get_local_peer_slot() -> int:
+	if not has_active_peer():
+		return get_peer_slot(1)
+	return get_peer_slot(multiplayer.get_unique_id())
+
 func _apply_state(
 	next_state: int,
 	next_host: bool,

@@ -6,6 +6,22 @@ const PACKAGE_SCENE := preload("res://scenes/entities/package.tscn")
 const ORDER_MANAGER_SCRIPT := preload("res://src/systems/order_manager.gd")
 const EVENT_BUS_SCRIPT := preload("res://src/autoload/event_bus.gd")
 
+class FakeClientNetworkManager extends Node:
+	var is_connected: bool = true
+	var is_host: bool = false
+	var is_connecting: bool = false
+	var connection_state: int = 2
+	var last_connection_error: int = int(OK)
+	var connected_peers: Dictionary = {1: true, 1096654874: true}
+
+	func get_peer_slot(peer_id: int) -> int:
+		var peer_ids: Array = connected_peers.keys()
+		peer_ids.sort()
+		return peer_ids.find(peer_id) + 1
+
+	func get_local_peer_slot() -> int:
+		return 2
+
 var _tree: SceneTree
 var _failures: Array[String] = []
 var _saved_game_state: Dictionary = {}
@@ -19,6 +35,7 @@ func run(tree: SceneTree) -> Array[String]:
 
 	await _test_hud_reflects_state_and_formats_labels()
 	await _test_hud_network_feedback_includes_connecting_and_error_metadata()
+	await _test_hud_network_status_uses_stable_slot_for_local_client_id()
 	await _test_hud_process_refreshes_after_interval_when_game_state_changes()
 	await _test_hud_order_status_falls_back_when_no_order_manager_exists()
 	await _test_hud_order_status_updates_immediately_when_orders_are_cleared()
@@ -28,6 +45,9 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_session_spawns_offline_world_with_default_offline_peer()
 	await _test_spawn_positions_use_peer_roster_slots_instead_of_raw_peer_ids()
 	await _test_local_player_profile_uses_peer_slot_labels()
+	await _test_hud_player_label_reflects_stable_slot_profiles()
+	await _test_host_network_state_rebuilds_world_with_slot_one_profile()
+	await _test_disconnect_network_state_respawns_offline_world()
 	await _test_warehouse_camera_frames_spawn_area()
 	await _test_apply_order_state_local_filters_and_copies_snapshot()
 
@@ -134,6 +154,32 @@ func _test_hud_network_feedback_includes_connecting_and_error_metadata() -> void
 	_assert(
 		unknown_label == "Unknown (Missing is_connected)",
 		"HUD should provide deterministic fallback copy when network manager shape is incomplete"
+	)
+
+	root.queue_free()
+	await _tree.process_frame
+
+
+func _test_hud_network_status_uses_stable_slot_for_local_client_id() -> void:
+	_set_network_disconnected_baseline()
+
+	var root := Node3D.new()
+	root.name = "HudStableClientSlotStatusRoot"
+	_tree.root.add_child(root)
+
+	var hud = HUD_SCENE.instantiate()
+	root.add_child(hud)
+	await _tree.process_frame
+
+	var fake_network_manager := FakeClientNetworkManager.new()
+	var network_text := String(hud._format_network_status(fake_network_manager))
+	_assert(
+		network_text.contains("id=2"),
+		"HUD network status should show the stable local client slot instead of the raw peer id"
+	)
+	_assert(
+		not network_text.contains("id=1096654874"),
+		"HUD network status should not leak the raw large ENet peer id when a stable slot exists"
 	)
 
 	root.queue_free()
@@ -412,6 +458,97 @@ func _test_local_player_profile_uses_peer_slot_labels() -> void:
 	var game_state := _game_state()
 	_assert(game_state.local_player_id == 2, "local player id should use stable peer slot index")
 	_assert(game_state.local_player_name == "Player 2", "local player name should use stable peer slot label")
+
+	session.queue_free()
+	await _tree.process_frame
+
+
+func _test_hud_player_label_reflects_stable_slot_profiles() -> void:
+	_set_network_disconnected_baseline()
+
+	var root := Node3D.new()
+	root.name = "HudStableSlotPlayerLabelRoot"
+	_tree.root.add_child(root)
+
+	var hud = HUD_SCENE.instantiate()
+	root.add_child(hud)
+	await _tree.process_frame
+
+	var game_state := _game_state()
+	game_state.set_local_player_profile(2, "Player 2")
+
+	_assert(
+		_label_text(hud, "PlayerLabel") == "Player: Player 2",
+		"HUD player label should reflect stable slot-based player profiles"
+	)
+
+	root.queue_free()
+	await _tree.process_frame
+
+
+func _test_host_network_state_rebuilds_world_with_slot_one_profile() -> void:
+	_set_network_disconnected_baseline()
+
+	var session = WAREHOUSE_SCENE.instantiate()
+	session.name = "SessionHostWorldRebuild"
+	_tree.root.add_child(session)
+	await _tree.process_frame
+	await _tree.process_frame
+
+	var network_manager := _network_manager()
+	network_manager.connected_peers = {
+		1: true,
+		1096654874: true
+	}
+	network_manager.set("is_connected", true)
+	network_manager.set("is_host", true)
+	network_manager.set("is_connecting", false)
+	network_manager.set("connection_state", 2)
+
+	session._clear_world()
+	session._on_network_state_changed(true, true)
+
+	var players := session.get_node("Players")
+	var packages := session.get_node("Packages")
+	var game_state := _game_state()
+	_assert(players.get_child_count() == 1, "host network state rebuild should spawn exactly one local host player")
+	_assert(packages.get_child_count() == 1, "host network state rebuild should respawn the local package")
+	_assert(game_state.local_player_id == 1, "host rebuild should keep stable local player slot P1")
+	_assert(game_state.local_player_name == "Player 1", "host rebuild should keep stable local player name")
+
+	session.queue_free()
+	await _tree.process_frame
+
+
+func _test_disconnect_network_state_respawns_offline_world() -> void:
+	_set_network_disconnected_baseline()
+
+	var session = WAREHOUSE_SCENE.instantiate()
+	session.name = "SessionDisconnectRespawn"
+	_tree.root.add_child(session)
+	await _tree.process_frame
+	await _tree.process_frame
+
+	var network_manager := _network_manager()
+	network_manager.set("is_connected", true)
+	network_manager.set("is_host", false)
+	network_manager.set("is_connecting", false)
+	network_manager.set("connection_state", 2)
+	session._clear_world()
+
+	network_manager.set("is_connected", false)
+	network_manager.set("is_host", false)
+	network_manager.set("is_connecting", false)
+	network_manager.set("connection_state", 0)
+	session._on_network_state_changed(false, false)
+
+	var players := session.get_node("Players")
+	var packages := session.get_node("Packages")
+	var game_state := _game_state()
+	_assert(players.get_child_count() == 1, "disconnect transition should respawn an offline player")
+	_assert(packages.get_child_count() == 1, "disconnect transition should respawn an offline package")
+	_assert(game_state.local_player_id == 1, "disconnect transition should restore local slot P1")
+	_assert(game_state.local_player_name == "Player 1", "disconnect transition should restore local player name")
 
 	session.queue_free()
 	await _tree.process_frame
