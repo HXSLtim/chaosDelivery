@@ -6,6 +6,7 @@ signal grab_ended(impulse: Vector3, fallback_owner_peer_id: int)
 
 @export var holder_anchor_path: NodePath
 @export var fallback_owner_peer_id: int = 1
+@export var holder_validation_interval: float = 0.08
 
 var owner_peer_id: int = 1
 var holder: Node3D = null
@@ -13,6 +14,7 @@ var holder: Node3D = null
 var _package: RigidBody3D
 var _original_parent: Node = null
 var _hold_target: Node3D = null
+var _holder_validation_elapsed: float = 0.0
 
 
 func _ready() -> void:
@@ -23,10 +25,13 @@ func _ready() -> void:
 	_original_parent = _package.get_parent()
 
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	if _package == null:
 		return
-	_recover_if_holder_stale()
+	_holder_validation_elapsed += maxf(delta, 0.0)
+	if _holder_validation_elapsed >= maxf(holder_validation_interval, 0.01):
+		_holder_validation_elapsed = 0.0
+		_recover_if_holder_stale()
 	if not _has_valid_holder():
 		return
 	if _hold_target == null or not is_instance_valid(_hold_target):
@@ -117,6 +122,7 @@ func force_set_holder(by: Node3D, new_owner_peer_id: int = 0) -> bool:
 	holder = by
 	owner_peer_id = new_owner_peer_id if new_owner_peer_id > 0 else fallback_owner_peer_id
 	_hold_target = _resolve_attach_target(by)
+	_holder_validation_elapsed = 0.0
 
 	# Local prototype behavior: freeze physics and attach under the holder anchor.
 	_package.freeze = true
@@ -145,6 +151,7 @@ func force_clear_holder(impulse: Vector3 = Vector3.ZERO, owner_peer_id_override:
 	holder = null
 	_hold_target = null
 	owner_peer_id = owner_peer_id_override if owner_peer_id_override > 0 else fallback_owner_peer_id
+	_holder_validation_elapsed = 0.0
 	if had_holder_ref or had_freeze or impulse.length_squared() > 0.0001:
 		grab_ended.emit(impulse, owner_peer_id)
 	return true

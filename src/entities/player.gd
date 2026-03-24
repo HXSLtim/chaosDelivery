@@ -21,9 +21,11 @@ const PLAYER_COUNT_REFRESH_INTERVAL := 0.25
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 var _last_input: Vector2 = Vector2.ZERO
 var _held_package = null
+var _predicted_held_package = null
 var _interaction_cooldown_left: float = 0.0
 var _request_timeout_left: float = 0.0
 var _waiting_for_network_action: bool = false
+var _awaiting_grab_release: bool = false
 var _last_holding_state: bool = false
 var _last_identity_cache: String = ""
 var _debug_material: StandardMaterial3D = null
@@ -104,12 +106,18 @@ func _handle_interactions() -> void:
 		return
 
 	var handled_grab_this_frame := false
-	if InputManager.is_grab_pressed():
+	var grab_pressed := InputManager.is_grab_pressed()
+	if _awaiting_grab_release:
+		if not Input.is_action_pressed(String(InputManager.ACTION_GRAB)) and not grab_pressed:
+			_awaiting_grab_release = false
+		grab_pressed = false
+	if grab_pressed:
 		handled_grab_this_frame = true
 		if _held_package != null:
 			if session != null and session.has_method("request_player_drop"):
 				if session.request_player_drop(self):
 					_held_package = null
+					_predicted_held_package = null
 					_mark_network_request_sent()
 				else:
 					_start_cooldown()
@@ -118,9 +126,16 @@ func _handle_interactions() -> void:
 				_start_cooldown()
 		else:
 			if session != null and session.has_method("request_player_grab"):
+				var predicted_package = _find_nearest_grabbable_package()
 				if session.request_player_grab(self):
+					_predicted_held_package = predicted_package
+					_held_package = predicted_package
+					_awaiting_grab_release = true
 					_mark_network_request_sent()
 				else:
+					_predicted_held_package = null
+					_held_package = null
+					_awaiting_grab_release = false
 					_start_cooldown()
 			else:
 				_try_grab_nearest_package()
@@ -133,6 +148,7 @@ func _handle_interactions() -> void:
 		if session != null and session.has_method("request_player_throw"):
 			if session.request_player_throw(self, -basis.z.normalized() * throw_impulse_strength):
 				_held_package = null
+				_predicted_held_package = null
 				_mark_network_request_sent()
 			else:
 				_start_cooldown()
@@ -142,9 +158,16 @@ func _handle_interactions() -> void:
 
 
 func _try_grab_nearest_package() -> void:
+	var nearest_package = _find_nearest_grabbable_package()
+	if nearest_package != null and nearest_package.request_grab(self, _local_requester_peer_id()):
+		_held_package = nearest_package
+		_predicted_held_package = null
+
+
+func _find_nearest_grabbable_package():
 	var tree := get_tree()
 	if tree == null:
-		return
+		return null
 
 	var nearest_package = null
 	var nearest_distance_squared := grab_range * grab_range
@@ -164,8 +187,7 @@ func _try_grab_nearest_package() -> void:
 		nearest_package = node
 		nearest_distance_squared = distance_squared
 
-	if nearest_package != null and nearest_package.request_grab(self, _local_requester_peer_id()):
-		_held_package = nearest_package
+	return nearest_package
 
 
 func _drop_package() -> void:
@@ -175,6 +197,7 @@ func _drop_package() -> void:
 	if _held_package.has_method("request_drop"):
 		_held_package.request_drop()
 	_held_package = null
+	_predicted_held_package = null
 
 
 func _throw_package() -> void:
@@ -185,6 +208,7 @@ func _throw_package() -> void:
 	if _held_package.has_method("request_drop"):
 		_held_package.request_drop(throw_direction * throw_impulse_strength)
 	_held_package = null
+	_predicted_held_package = null
 
 
 func _get_session() -> Node:
@@ -221,8 +245,26 @@ func _find_held_package_for_self():
 func _resolve_held_package():
 	if _held_package != null and is_instance_valid(_held_package) and _held_package.is_inside_tree():
 		if _held_package.get("holder") == self:
+			_predicted_held_package = null
 			return _held_package
-	return _find_held_package_for_self()
+
+	var resolved_package = _find_held_package_for_self()
+	if resolved_package != null:
+		_predicted_held_package = null
+		return resolved_package
+
+	if _predicted_held_package == null:
+		return null
+	if not is_instance_valid(_predicted_held_package) or not _predicted_held_package.is_inside_tree():
+		_predicted_held_package = null
+		return null
+
+	var predicted_holder: Variant = _predicted_held_package.get("holder")
+	if predicted_holder != null and predicted_holder != self:
+		_predicted_held_package = null
+		return null
+
+	return _predicted_held_package
 
 
 func _broadcast_state() -> void:

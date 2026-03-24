@@ -421,11 +421,17 @@ func _clear_world() -> void:
 	})
 	for child in _get_all_players():
 		if child != null and is_instance_valid(child):
-			child.free()
+			var parent: Node = child.get_parent()
+			if parent != null:
+				parent.remove_child(child)
+			child.queue_free()
 
 	for child in _get_all_packages():
 		if child != null and is_instance_valid(child):
-			child.free()
+			var parent: Node = child.get_parent()
+			if parent != null:
+				parent.remove_child(child)
+			child.queue_free()
 
 
 func _update_local_player_profile(peer_id: int) -> void:
@@ -668,7 +674,7 @@ func _broadcast_all_package_snapshots() -> void:
 func _get_all_players() -> Array:
 	var players: Array = []
 	for node in get_tree().get_nodes_in_group("players"):
-		if node is Node3D and is_ancestor_of(node):
+		if node is Node3D and is_ancestor_of(node) and not node.is_queued_for_deletion():
 			players.append(node)
 	return players
 
@@ -676,7 +682,7 @@ func _get_all_players() -> Array:
 func _get_all_packages() -> Array:
 	var packages: Array = []
 	for node in get_tree().get_nodes_in_group("packages"):
-		if node is Node3D and is_ancestor_of(node):
+		if node is Node3D and is_ancestor_of(node) and not node.is_queued_for_deletion():
 			packages.append(node)
 	return packages
 

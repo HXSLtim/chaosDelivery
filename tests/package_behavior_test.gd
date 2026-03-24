@@ -1,6 +1,7 @@
 extends RefCounted
 
 const PACKAGE_SCENE := preload("res://scenes/entities/package.tscn")
+const GRABBABLE_COMPONENT_SCRIPT := preload("res://src/components/grabbable_component.gd")
 
 var _tree: SceneTree
 var _failures: Array[String] = []
@@ -16,6 +17,7 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_stale_holder_is_not_reported_as_held()
 	await _test_stale_holder_recovers_cleanly()
 	await _test_invalid_held_snapshot_falls_back_to_ground_state()
+	await _test_grabbable_component_throttles_stale_holder_recovery_in_physics()
 
 	return _failures
 
@@ -153,6 +155,34 @@ func _test_invalid_held_snapshot_falls_back_to_ground_state() -> void:
 	_assert(package.holder == null, "invalid held snapshot should clear holder")
 	_assert(not package.freeze, "invalid held snapshot should release physics freeze")
 
+	world.queue_free()
+	await _tree.process_frame
+
+
+func _test_grabbable_component_throttles_stale_holder_recovery_in_physics() -> void:
+	var world := _make_world("GrabbableThrottle")
+	var packages := world.get_node("Packages")
+	var holder := _make_holder("ThrottleHolder")
+	world.add_child(holder)
+
+	var package_body := RigidBody3D.new()
+	package_body.name = "RawPackageBody"
+	packages.add_child(package_body)
+
+	var component = GRABBABLE_COMPONENT_SCRIPT.new()
+	package_body.add_child(component)
+	await _tree.process_frame
+
+	_assert(component.force_set_holder(holder, 1), "setup should allow component to attach to holder")
+	world.remove_child(holder)
+
+	component._physics_process(0.02)
+	_assert(component.holder != null, "physics recovery should not clear stale holder before validation interval elapses")
+
+	component._physics_process(0.10)
+	_assert(component.holder == null, "physics recovery should clear stale holder after validation interval elapses")
+
+	holder.free()
 	world.queue_free()
 	await _tree.process_frame
 

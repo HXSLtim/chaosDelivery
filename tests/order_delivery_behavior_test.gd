@@ -19,6 +19,7 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_delivery_zone_deduplicates_delivery_until_phase_reset()
 	await _test_delivery_zone_uses_node_name_when_package_id_missing()
 	await _test_delivery_zone_rejects_when_order_manager_is_missing()
+	await _test_delivery_zone_rechecks_thrown_package_after_landing_inside_zone()
 
 	return _failures
 
@@ -337,6 +338,65 @@ func _test_delivery_zone_rejects_when_order_manager_is_missing() -> void:
 
 	zone._on_body_entered(package)
 	_assert(reasons == ["missing_order_manager"], "delivery zone should reject package when order manager is missing")
+
+	world.queue_free()
+	await _tree.process_frame
+
+
+func _test_delivery_zone_rechecks_thrown_package_after_landing_inside_zone() -> void:
+	var world := _make_world("DeliveryZoneThrownLandingRetry")
+	var gameplay := Node.new()
+	gameplay.name = "Gameplay"
+	world.add_child(gameplay)
+
+	var manager = ORDER_MANAGER_SCRIPT.new()
+	gameplay.add_child(manager)
+
+	var zone = DELIVERY_ZONE_SCENE.instantiate()
+	zone.auto_seed_static_order = false
+	zone.destination_id = "A"
+	gameplay.add_child(zone)
+
+	var holder := Node3D.new()
+	holder.name = "ThrowingHolder"
+	world.add_child(holder)
+
+	var package = PACKAGE_SCENE.instantiate()
+	package.name = "PkgThrownLanding"
+	package.package_id = "pkg_thrown_retry"
+	package.package_type = "normal"
+	world.add_child(package)
+	await _tree.process_frame
+
+	manager.clear_orders()
+	manager.create_order("normal", "A")
+
+	var delivered_ids: Array[String] = []
+	var rejected_reasons: Array[String] = []
+	zone.package_delivered.connect(func(package_id: String, _order_id: String) -> void:
+		delivered_ids.append(package_id)
+	)
+	zone.delivery_rejected.connect(func(_package_id: String, reason: String) -> void:
+		rejected_reasons.append(reason)
+	)
+
+	_assert(package.request_grab(holder, 1), "setup should allow holder to grab package before throw")
+	_assert(package.request_drop(Vector3(3.0, 0.0, 0.0)), "setup should allow package throw before zone entry")
+	_assert(package.is_thrown(), "setup should put package into THROWN state")
+
+	zone._on_body_entered(package)
+	_assert(
+		rejected_reasons == ["package_state_thrown"],
+		"delivery zone should reject the initial thrown entry before the package lands"
+	)
+	_assert(delivered_ids.is_empty(), "delivery zone should not deliver while package is still thrown")
+
+	package._change_state(package.State.ON_GROUND)
+
+	_assert(
+		delivered_ids == ["pkg_thrown_retry"],
+		"delivery zone should re-check a thrown package when it lands inside the zone without requiring re-entry"
+	)
 
 	world.queue_free()
 	await _tree.process_frame

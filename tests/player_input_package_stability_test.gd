@@ -3,6 +3,23 @@ extends RefCounted
 const PLAYER_SCENE := preload("res://scenes/entities/player.tscn")
 const PACKAGE_SCENE := preload("res://scenes/entities/package.tscn")
 
+class FakeNetworkGrabSession extends Node3D:
+	var grab_requests: int = 0
+	var throw_requests: int = 0
+	var last_throw_impulse: Vector3 = Vector3.ZERO
+
+	func _ready() -> void:
+		add_to_group("warehouse_session")
+
+	func request_player_grab(_player: Node3D) -> bool:
+		grab_requests += 1
+		return true
+
+	func request_player_throw(_player: Node3D, impulse: Vector3) -> bool:
+		throw_requests += 1
+		last_throw_impulse = impulse
+		return true
+
 var _tree: SceneTree
 var _failures: Array[String] = []
 
@@ -15,6 +32,7 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_player_grab_selects_nearest_package_within_range()
 	await _test_player_grab_ignores_packages_out_of_range()
 	await _test_same_frame_grab_and_throw_input_drops_without_throwing()
+	await _test_network_grab_prediction_allows_throw_after_timeout_before_snapshot_arrives()
 	await _test_player_display_peer_id_maps_large_authority_to_stable_slot()
 	await _test_player_runtime_labels_use_stable_peer_slots_when_networked()
 
@@ -114,6 +132,76 @@ func _test_same_frame_grab_and_throw_input_drops_without_throwing() -> void:
 
 	world.queue_free()
 	await _tree.process_frame
+
+
+func _test_network_grab_prediction_allows_throw_after_timeout_before_snapshot_arrives() -> void:
+	var network_manager := _tree.root.get_node_or_null("NetworkManager")
+	_assert(network_manager != null, "NetworkManager should exist for predicted network grab test")
+	if network_manager == null:
+		return
+
+	network_manager.leave_game()
+	_assert(network_manager.host_game() == OK, "setup should host a local session for predicted network grab test")
+	network_manager.connected_peers = {1: true}
+
+	var world := _make_world("PredictedNetworkGrabThrow")
+	var session := FakeNetworkGrabSession.new()
+	session.name = "FakePredictiveSession"
+	world.add_child(session)
+
+	var player = PLAYER_SCENE.instantiate()
+	player.name = "PlayerPredictive"
+	player.grab_range = 3.0
+	player.network_request_timeout = 0.05
+	player.interaction_cooldown = 0.01
+	world.add_child(player)
+
+	var package = PACKAGE_SCENE.instantiate()
+	package.name = "PkgPredicted"
+	world.get_node("Packages").add_child(package)
+	await _tree.process_frame
+
+	player.global_position = Vector3.ZERO
+	package.global_position = Vector3(0.8, 0.0, 0.0)
+	Input.action_press(String(InputManager.ACTION_GRAB))
+	player._physics_process(1.0 / 60.0)
+	Input.action_release(String(InputManager.ACTION_GRAB))
+	_assert(session.grab_requests == 1, "network session should receive a grab request on the first frame")
+	await _tree.process_frame
+
+	player._physics_process(player.network_request_timeout + 0.01)
+	await _tree.process_frame
+
+	Input.action_press(String(InputManager.ACTION_THROW))
+	player._physics_process(1.0 / 60.0)
+	Input.action_release(String(InputManager.ACTION_THROW))
+
+	var held_after_throw = player.get("_held_package")
+	var predicted_after_throw = player.get("_predicted_held_package")
+	var wait_after_throw := bool(player.get("_waiting_for_network_action"))
+	var cooldown_after_throw := float(player.get("_interaction_cooldown_left"))
+
+	_assert(
+		session.throw_requests == 1,
+		"predicted network-held package should allow throw request after timeout before authoritative snapshot arrives (held=%s predicted=%s waiting=%s cooldown=%.3f grab_requests=%d)" % [
+			str(held_after_throw != null),
+			str(predicted_after_throw != null),
+			str(wait_after_throw),
+			cooldown_after_throw,
+			session.grab_requests
+		]
+	)
+	_assert(
+		session.last_throw_impulse.length() > 0.0,
+		"predicted throw should still send a non-zero throw impulse (throw_requests=%d impulse=%s)" % [
+			session.throw_requests,
+			session.last_throw_impulse
+		]
+	)
+
+	world.queue_free()
+	await _tree.process_frame
+	network_manager.leave_game()
 
 
 func _test_player_display_peer_id_maps_large_authority_to_stable_slot() -> void:

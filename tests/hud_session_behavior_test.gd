@@ -39,6 +39,7 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_hud_process_refreshes_after_interval_when_game_state_changes()
 	await _test_hud_order_status_falls_back_when_no_order_manager_exists()
 	await _test_hud_order_status_updates_immediately_when_orders_are_cleared()
+	await _test_hud_rebind_disconnects_previous_order_manager_signals()
 	await _test_hud_delivery_feedback_prefers_explicit_game_state_feedback()
 	await _test_delivery_tracking_resets_when_session_requests_reset()
 	await _test_rejected_delivery_increments_failed_orders_and_respawns_package()
@@ -48,6 +49,7 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_hud_player_label_reflects_stable_slot_profiles()
 	await _test_host_network_state_rebuilds_world_with_slot_one_profile()
 	await _test_disconnect_network_state_respawns_offline_world()
+	await _test_clear_world_detaches_nodes_before_deferred_free()
 	await _test_warehouse_camera_frames_spawn_area()
 	await _test_apply_order_state_local_filters_and_copies_snapshot()
 
@@ -181,6 +183,7 @@ func _test_hud_network_status_uses_stable_slot_for_local_client_id() -> void:
 		not network_text.contains("id=1096654874"),
 		"HUD network status should not leak the raw large ENet peer id when a stable slot exists"
 	)
+	fake_network_manager.free()
 
 	root.queue_free()
 	await _tree.process_frame
@@ -277,6 +280,49 @@ func _test_hud_order_status_updates_immediately_when_orders_are_cleared() -> voi
 	_assert(
 		_label_text(hud, "OrdersLabel") == "Orders: Pending 0  Completed 3  Failed 1",
 		"HUD should update pending order visibility immediately after order manager clear_orders signal"
+	)
+
+	root.queue_free()
+	await _tree.process_frame
+
+
+func _test_hud_rebind_disconnects_previous_order_manager_signals() -> void:
+	_set_network_disconnected_baseline()
+
+	var root := Node3D.new()
+	root.name = "HudRebindDisconnectRoot"
+	_tree.root.add_child(root)
+
+	var first_manager = ORDER_MANAGER_SCRIPT.new()
+	first_manager.name = "HudFirstOrders"
+	root.add_child(first_manager)
+
+	var second_manager = ORDER_MANAGER_SCRIPT.new()
+	second_manager.name = "HudSecondOrders"
+	root.add_child(second_manager)
+	await _tree.process_frame
+
+	var hud = HUD_SCENE.instantiate()
+	root.add_child(hud)
+	await _tree.process_frame
+
+	hud._order_manager = first_manager
+	hud._resolve_and_bind_dependencies()
+	_assert(
+		first_manager.is_connected("orders_changed", Callable(hud, "_on_order_manager_orders_changed")),
+		"HUD should bind to the initial order manager"
+	)
+
+	hud._order_manager = second_manager
+	hud._resolve_and_bind_dependencies()
+
+	_assert(
+		not first_manager.is_connected("orders_changed", Callable(hud, "_on_order_manager_orders_changed")),
+		"HUD should disconnect old order manager signals when rebinding to a new manager"
+	)
+	_assert(
+		second_manager.is_connected("orders_changed", Callable(hud, "_on_order_manager_orders_changed")),
+		"HUD should connect the new order manager after rebinding"
 	)
 
 	root.queue_free()
@@ -549,6 +595,37 @@ func _test_disconnect_network_state_respawns_offline_world() -> void:
 	_assert(packages.get_child_count() == 1, "disconnect transition should respawn an offline package")
 	_assert(game_state.local_player_id == 1, "disconnect transition should restore local slot P1")
 	_assert(game_state.local_player_name == "Player 1", "disconnect transition should restore local player name")
+
+	session.queue_free()
+	await _tree.process_frame
+
+
+func _test_clear_world_detaches_nodes_before_deferred_free() -> void:
+	_set_network_disconnected_baseline()
+
+	var session = WAREHOUSE_SCENE.instantiate()
+	session.name = "SessionDeferredClearWorld"
+	_tree.root.add_child(session)
+	await _tree.process_frame
+	await _tree.process_frame
+
+	var players := session.get_node("Players")
+	var packages := session.get_node("Packages")
+	var player = players.get_child(0)
+	var package = packages.get_child(0)
+
+	session._clear_world()
+
+	_assert(players.get_child_count() == 0, "_clear_world should detach player nodes immediately before deferred free")
+	_assert(packages.get_child_count() == 0, "_clear_world should detach package nodes immediately before deferred free")
+	_assert(is_instance_valid(player), "cleared player should remain valid until deferred free runs")
+	_assert(is_instance_valid(package), "cleared package should remain valid until deferred free runs")
+	if is_instance_valid(player):
+		_assert(player.is_queued_for_deletion(), "cleared player should be queued for deferred deletion")
+		_assert(not player.is_inside_tree(), "cleared player should no longer remain inside the scene tree")
+	if is_instance_valid(package):
+		_assert(package.is_queued_for_deletion(), "cleared package should be queued for deferred deletion")
+		_assert(not package.is_inside_tree(), "cleared package should no longer remain inside the scene tree")
 
 	session.queue_free()
 	await _tree.process_frame

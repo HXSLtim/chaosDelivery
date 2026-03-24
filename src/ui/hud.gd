@@ -25,6 +25,8 @@ var _pending_orders_hint: int = -1
 var _last_delivery_feedback: String = "Delivery: Waiting for first result."
 var _last_completed_orders: int = -1
 var _last_failed_orders: int = -1
+var _bound_event_bus: Node = null
+var _bound_order_manager: Node = null
 
 
 func _ready() -> void:
@@ -41,6 +43,14 @@ func _process(delta: float) -> void:
 	_refresh_timer = _refresh_interval
 	_resolve_and_bind_dependencies()
 	_refresh_labels()
+
+
+func _exit_tree() -> void:
+	var tree := get_tree()
+	if tree != null and tree.node_added.is_connected(_on_tree_node_added):
+		tree.node_added.disconnect(_on_tree_node_added)
+	_rebind_event_bus(null)
+	_rebind_order_manager(null)
 
 
 func _refresh_labels() -> void:
@@ -361,7 +371,6 @@ func _resolve_order_manager() -> Node:
 		return null
 
 	_order_manager = tree.get_first_node_in_group("order_manager")
-	_bind_order_manager_signals(_order_manager)
 	_update_pending_orders_hint(_order_manager)
 	return _order_manager
 
@@ -430,12 +439,10 @@ func _bind_tree_signals() -> void:
 func _resolve_and_bind_dependencies() -> void:
 	_game_state = get_node_or_null("/root/GameState")
 	_network_manager = get_node_or_null("/root/NetworkManager")
-	_event_bus = get_node_or_null("/root/EventBus")
+	_rebind_event_bus(get_node_or_null("/root/EventBus"))
 	_order_manager = _resolve_order_manager()
 	_update_pending_orders_hint(_order_manager)
-
-	_bind_event_bus_signals(_event_bus)
-	_bind_order_manager_signals(_order_manager)
+	_rebind_order_manager(_order_manager)
 
 
 func _bind_event_bus_signals(event_bus: Node) -> void:
@@ -478,7 +485,7 @@ func _on_tree_node_added(node: Node) -> void:
 	if not node.is_in_group("order_manager"):
 		return
 	_order_manager = node
-	_bind_order_manager_signals(_order_manager)
+	_rebind_order_manager(_order_manager)
 	_update_pending_orders_hint(_order_manager)
 	_refresh_labels()
 
@@ -569,6 +576,60 @@ func _update_pending_orders_hint(order_manager: Node) -> void:
 			_pending_orders_hint = pending_count
 			return
 	_pending_orders_hint = -1
+
+
+func _rebind_event_bus(event_bus: Node) -> void:
+	if _bound_event_bus == event_bus:
+		_event_bus = event_bus
+		return
+	_disconnect_event_bus_signals(_bound_event_bus)
+	_bound_event_bus = event_bus
+	_event_bus = event_bus
+	_bind_event_bus_signals(_bound_event_bus)
+
+
+func _rebind_order_manager(order_manager: Node) -> void:
+	if _bound_order_manager == order_manager:
+		_order_manager = order_manager
+		return
+	_disconnect_order_manager_signals(_bound_order_manager)
+	_bound_order_manager = order_manager
+	_order_manager = order_manager
+	_bind_order_manager_signals(_bound_order_manager)
+
+
+func _disconnect_event_bus_signals(event_bus: Node) -> void:
+	if event_bus == null:
+		return
+	_try_disconnect(event_bus, "phase_changed", _on_phase_changed)
+	_try_disconnect(event_bus, "network_state_changed", _on_network_state_changed)
+	_try_disconnect(event_bus, "player_joined", _on_player_roster_changed)
+	_try_disconnect(event_bus, "player_left", _on_player_roster_changed)
+	_try_disconnect(event_bus, "order_added", _on_order_event_changed)
+	_try_disconnect(event_bus, "order_completed", _on_order_event_changed)
+	_try_disconnect(event_bus, "local_player_profile_changed", _on_local_player_profile_changed)
+	_try_disconnect(event_bus, "session_totals_changed", _on_session_totals_changed)
+	_try_disconnect(event_bus, "delivery_feedback_changed", _on_delivery_feedback_changed)
+
+
+func _disconnect_order_manager_signals(order_manager: Node) -> void:
+	if order_manager == null:
+		return
+	_try_disconnect(order_manager, "orders_changed", _on_order_manager_orders_changed)
+	_try_disconnect(order_manager, "pending_count_changed", _on_order_manager_pending_count_changed)
+	_try_disconnect(order_manager, "order_created", _on_order_manager_order_created)
+	_try_disconnect(order_manager, "order_marked_completed", _on_order_manager_order_marked_completed)
+	_try_disconnect(order_manager, "orders_cleared", _on_order_manager_orders_cleared)
+	_try_disconnect(order_manager, "order_added", _on_order_event_changed)
+	_try_disconnect(order_manager, "order_completed", _on_order_event_changed)
+
+
+func _try_disconnect(node: Node, signal_name: StringName, callable: Callable) -> void:
+	if node == null or not node.has_signal(signal_name):
+		return
+	if not node.is_connected(signal_name, callable):
+		return
+	node.disconnect(signal_name, callable)
 
 
 func _read_delivery_feedback(game_state: Node) -> Dictionary:

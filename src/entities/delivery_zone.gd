@@ -12,10 +12,12 @@ signal delivery_rejected(package_id: String, reason: String)
 
 var _order_manager: Node = null
 var _delivered_cache: Dictionary = {}
+var _pending_landing_packages: Dictionary = {}
 
 
 func _ready() -> void:
 	body_entered.connect(_on_body_entered)
+	body_exited.connect(_on_body_exited)
 	_order_manager = _find_order_manager()
 	var event_bus := _get_event_bus()
 	if event_bus != null and not event_bus.phase_changed.is_connected(_on_phase_changed):
@@ -38,9 +40,23 @@ func _on_body_entered(body: Node) -> void:
 		return
 
 	var state_rejection_reason := _get_package_rejection_reason(body)
+	if state_rejection_reason == "package_state_thrown":
+		_track_pending_landing_package(body)
+	else:
+		_untrack_pending_landing_package(body)
 	if not state_rejection_reason.is_empty():
 		delivery_rejected.emit(package_id, state_rejection_reason)
 		return
+
+	_process_delivery(body, package_id)
+
+
+func _on_body_exited(body: Node) -> void:
+	_untrack_pending_landing_package(body)
+
+
+func _process_delivery(body: Node, package_id: String) -> void:
+	_untrack_pending_landing_package(body)
 
 	if _order_manager == null or not is_instance_valid(_order_manager):
 		_order_manager = _find_order_manager()
@@ -89,6 +105,7 @@ func _on_phase_changed(new_phase: int, _old_phase: int) -> void:
 
 func reset_delivery_tracking() -> void:
 	_delivered_cache.clear()
+	_clear_pending_landing_tracking()
 
 
 func _is_package(node: Node) -> bool:
@@ -142,3 +159,55 @@ func _extract_package_id(node: Node) -> String:
 	if fallback_name != "":
 		return fallback_name
 	return "instance_%d" % node.get_instance_id()
+
+
+func _track_pending_landing_package(node: Node) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	if not node.has_signal("package_state_changed"):
+		return
+
+	var package_key := node.get_instance_id()
+	if _pending_landing_packages.has(package_key):
+		return
+
+	var state_changed_callable := Callable(self, "_on_tracked_package_state_changed").bind(node)
+	_pending_landing_packages[package_key] = state_changed_callable
+	if not node.is_connected("package_state_changed", state_changed_callable):
+		node.connect("package_state_changed", state_changed_callable)
+
+
+func _untrack_pending_landing_package(node: Node) -> void:
+	if node == null:
+		return
+
+	var package_key := node.get_instance_id()
+	if not _pending_landing_packages.has(package_key):
+		return
+
+	var state_changed_callable: Callable = _pending_landing_packages.get(package_key)
+	_pending_landing_packages.erase(package_key)
+	if is_instance_valid(node) and node.has_signal("package_state_changed") and node.is_connected("package_state_changed", state_changed_callable):
+		node.disconnect("package_state_changed", state_changed_callable)
+
+
+func _clear_pending_landing_tracking() -> void:
+	for package_key in _pending_landing_packages.keys():
+		var state_changed_callable: Callable = _pending_landing_packages.get(package_key)
+		for body in get_overlapping_bodies():
+			if body != null and is_instance_valid(body) and body.get_instance_id() == int(package_key):
+				if body.has_signal("package_state_changed") and body.is_connected("package_state_changed", state_changed_callable):
+					body.disconnect("package_state_changed", state_changed_callable)
+				break
+	_pending_landing_packages.clear()
+
+
+func _on_tracked_package_state_changed(new_state: int, _previous_state: int, node: Node) -> void:
+	if node == null or not is_instance_valid(node):
+		_untrack_pending_landing_package(node)
+		return
+	if new_state != 0:
+		return
+
+	_untrack_pending_landing_package(node)
+	_on_body_entered(node)
