@@ -40,6 +40,10 @@ static func info(scope: String, message: String, fields: Dictionary = {}) -> voi
 	print(format_message(scope, message, fields))
 
 
+static func warning_text(scope: String, message: String, fields: Dictionary = {}) -> String:
+	return format_message(scope, message, fields)
+
+
 static func _value_to_text(value: Variant) -> String:
 	match typeof(value):
 		TYPE_STRING:

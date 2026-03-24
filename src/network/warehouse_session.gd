@@ -7,7 +7,7 @@ const LOCALHOST_ADDRESS := "127.0.0.1"
 const PACKAGE_NODE_NAME := "package_1"
 const DEFAULT_DESTINATION := "A"
 const DEFAULT_PACKAGE_TYPE := "normal"
-const PACKAGE_SYNC_INTERVAL := 0.1
+const PACKAGE_SYNC_INTERVAL := 0.1  # 10Hz 的包裹快照足够覆盖原型联机同步，避免每帧广播。
 const DELIVERY_REWARD_GOLD := 25
 const DELIVERY_REWARD_SCORE := 100
 
@@ -134,7 +134,10 @@ func _host_local_session() -> void:
 	if err != OK:
 		_session_transition = SessionTransition.NONE
 		_network_action_cooldown = 0.8
-		push_warning("Failed to host LAN session on port %d: %s" % [NetworkManager.DEFAULT_PORT, error_string(err)])
+		push_warning(RuntimeLog.warning_text("Session", "host LAN session failed", {
+			"port": NetworkManager.DEFAULT_PORT,
+			"error": error_string(err)
+		}))
 		_spawn_offline_world()
 		return
 
@@ -165,7 +168,10 @@ func _join_local_session() -> void:
 	if err != OK:
 		_session_transition = SessionTransition.NONE
 		_network_action_cooldown = 0.4
-		push_warning("Failed to join LAN session: %s" % error_string(err))
+		push_warning(RuntimeLog.warning_text("Session", "join LAN session failed", {
+			"address": LOCALHOST_ADDRESS,
+			"error": error_string(err)
+		}))
 		_spawn_offline_world()
 
 
@@ -212,7 +218,7 @@ func _on_network_state_changed(connected: bool, host: bool) -> void:
 	RuntimeLog.info("Session", "network state changed", {
 		"connected": connected,
 		"host": host,
-		"peer_id": multiplayer.get_unique_id() if NetworkManager.has_active_peer() else -1
+		"peer_id": _safe_local_peer_id()
 	})
 	_configure_delivery_zone(not connected or host)
 
@@ -380,13 +386,14 @@ func _spawn_player_local(peer_id: int, spawn_position: Vector3) -> void:
 	_players.add_child(player, true)
 	player.global_position = spawn_position
 	_apply_player_debug_tint(player, peer_id)
+	var is_local_player := true if _safe_local_peer_id() < 0 else player.is_multiplayer_authority()
 	RuntimeLog.info("Session", "spawned player", {
 		"peer_id": peer_id,
 		"node": node_name,
 		"spawn_position": spawn_position,
 		"authority": player.get_multiplayer_authority(),
-		"local": player.is_multiplayer_authority(),
-		"local_peer_id": multiplayer.get_unique_id() if NetworkManager.has_active_peer() else -1
+		"local": is_local_player,
+		"local_peer_id": _safe_local_peer_id()
 	})
 
 
@@ -658,6 +665,13 @@ func _respawn_package(package: Node3D) -> void:
 			package.global_position = _package_spawn.global_position
 
 	_broadcast_package_snapshot(package)
+
+
+func _safe_local_peer_id() -> int:
+	var peer := multiplayer.multiplayer_peer
+	if peer == null or peer is OfflineMultiplayerPeer:
+		return -1
+	return multiplayer.get_unique_id()
 
 
 func _allocate_package_id() -> String:

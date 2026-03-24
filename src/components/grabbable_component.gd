@@ -1,6 +1,8 @@
 extends Node
 class_name GrabbableComponent
 
+const RuntimeLog := preload("res://src/utils/runtime_log.gd")
+
 signal grab_started(holder: Node3D, owner_peer_id: int)
 signal grab_ended(impulse: Vector3, fallback_owner_peer_id: int)
 
@@ -20,7 +22,9 @@ var _holder_validation_elapsed: float = 0.0
 func _ready() -> void:
 	_package = get_parent() as RigidBody3D
 	if _package == null:
-		push_warning("GrabbableComponent must be a direct child of Package.")
+		push_warning(RuntimeLog.warning_text("GrabbableComponent", "component must be a direct child of Package", {
+			"node": name
+		}))
 		return
 	_original_parent = _package.get_parent()
 
@@ -39,7 +43,7 @@ func _physics_process(delta: float) -> void:
 	if _hold_target == null:
 		return
 
-	# Keep the package in its authoritative parent branch and only follow transform.
+	# 包裹始终留在权威父节点下，只同步跟随位置和朝向。
 	_package.global_position = _hold_target.global_position
 	_package.global_rotation = _hold_target.global_rotation
 
@@ -51,7 +55,7 @@ func can_grab(by: Node3D, requester_peer_id: int = 0, max_distance: float = -1.0
 		return false
 	_recover_if_holder_stale()
 	if _has_valid_holder():
-		# Idempotent path: same holder re-requesting grab is treated as valid.
+		# 同一持有者重复请求抓取时直接视为成功，保持幂等。
 		return holder == by
 	if max_distance > 0.0 and _package.global_position.distance_to(by.global_position) > max_distance:
 		return false
@@ -92,7 +96,7 @@ func try_grab(by: Node3D, requester_peer_id: int = 0) -> bool:
 
 func try_drop(impulse: Vector3 = Vector3.ZERO) -> bool:
 	if not can_drop():
-		# Idempotent path: already-released package should not fail repeated drop requests.
+		# 已经释放的包裹重复 drop 时仍返回成功，避免网络重放造成误判。
 		return holder == null and _package != null and not _package.freeze
 
 	return force_clear_holder(impulse)
@@ -124,7 +128,7 @@ func force_set_holder(by: Node3D, new_owner_peer_id: int = 0) -> bool:
 	_hold_target = _resolve_attach_target(by)
 	_holder_validation_elapsed = 0.0
 
-	# Local prototype behavior: freeze physics and attach under the holder anchor.
+	# 原型阶段采用冻结物理并跟随挂点的方式表现持有状态。
 	_package.freeze = true
 	_package.linear_velocity = Vector3.ZERO
 	_package.angular_velocity = Vector3.ZERO
@@ -203,6 +207,5 @@ func _recover_if_holder_stale() -> void:
 		return
 	if _has_valid_holder():
 		return
-	# Stale holder reference can happen after disconnect/free. Force a clean release so
-	# package-level listeners clear their own holder state too.
+	# holder 在断线或节点释放后可能变成陈旧引用，这里强制清理，确保包裹自身状态也同步回收。
 	force_clear_holder(Vector3.ZERO)

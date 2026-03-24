@@ -108,7 +108,7 @@ func _test_get_local_peer_slot_returns_slot_one_while_hosting() -> void:
 	var network_manager := _network_manager()
 	network_manager.leave_game()
 	_assert(network_manager.host_game() == OK, "setup should allow hosting for local peer slot test")
-	# Large peer ids simulate ENet-assigned remote peer identifiers rather than stable local slots.
+	# 大型 peer id 用来模拟 ENet 生成的远端连接标识，而不是稳定的本地槽位编号。
 	network_manager.connected_peers = {
 		1: true,
 		1096654874: true

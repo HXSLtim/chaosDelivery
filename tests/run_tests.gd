@@ -9,6 +9,7 @@ const GAME_STATE_SIGNAL_BEHAVIOR_TEST := preload("res://tests/game_state_signal_
 const PLAYER_INPUT_PACKAGE_STABILITY_TEST := preload("res://tests/player_input_package_stability_test.gd")
 const NETWORK_MANAGER_HELPER_TEST := preload("res://tests/network_manager_helper_test.gd")
 const RUNTIME_LOG_BEHAVIOR_TEST := preload("res://tests/runtime_log_behavior_test.gd")
+const DEV_CONSOLE_BEHAVIOR_TEST := preload("res://tests/dev_console_behavior_test.gd")
 
 
 func _ready() -> void:
@@ -36,6 +37,8 @@ func _run() -> void:
 	failures.append_array(await network_manager_helper_test.run(tree))
 	var runtime_log_behavior_test = RUNTIME_LOG_BEHAVIOR_TEST.new()
 	failures.append_array(await runtime_log_behavior_test.run(tree))
+	var dev_console_behavior_test = DEV_CONSOLE_BEHAVIOR_TEST.new()
+	failures.append_array(await dev_console_behavior_test.run(tree))
 
 	if failures.is_empty():
 		RUNTIME_LOG.clear_force_enabled()

@@ -179,7 +179,7 @@ func _test_session_profile_signal_uses_stable_slot_labels_for_remote_peers() -> 
 
 	network_manager.connected_peers = {
 		1: true,
-		# Large peer ids simulate ENet-assigned remote peer identifiers rather than stable player slots.
+		# 大型 peer id 用来模拟 ENet 生成的远端连接标识，而不是稳定的玩家槽位编号。
 		1096654874: true
 	}
 
@@ -218,7 +218,7 @@ func _test_session_profile_signal_keeps_host_on_slot_one_when_remote_peers_exist
 		return
 
 	network_manager.connected_peers = {
-		# Large peer ids simulate ENet-assigned remote peer identifiers rather than stable player slots.
+		# 大型 peer id 用来模拟 ENet 生成的远端连接标识，而不是稳定的玩家槽位编号。
 		2147483640: true,
 		1: true,
 		1096654874: true

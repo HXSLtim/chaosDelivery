@@ -9,7 +9,7 @@ const RuntimeLog := preload("res://src/utils/runtime_log.gd")
 @export var grab_range: float = 2.0
 @export var throw_impulse_strength: float = 4.5
 @export var interaction_cooldown: float = 0.12
-@export var network_request_timeout: float = 0.35
+@export var network_request_timeout: float = 0.35  # 350ms 可覆盖局域网原型下一次 RPC 往返和一帧级抖动。
 @export var expected_player_count: int = 2
 
 const LOCAL_COLOR := Color(0.329, 0.851, 0.557, 1.0)
@@ -26,6 +26,7 @@ var _interaction_cooldown_left: float = 0.0
 var _request_timeout_left: float = 0.0
 var _waiting_for_network_action: bool = false
 var _awaiting_grab_release: bool = false
+var _pending_network_hold: bool = false
 var _last_holding_state: bool = false
 var _last_identity_cache: String = ""
 var _debug_material: StandardMaterial3D = null
@@ -78,7 +79,7 @@ func _read_move_input() -> Vector2:
 	var x := InputManager.get_move_vector().x
 	var y := InputManager.get_move_vector().y
 
-	# Fallback to built-in ui_* actions for early prototyping.
+	# 原型阶段仍保留 ui_* 动作，方便在输入映射缺失时继续调试。
 	if is_zero_approx(x):
 		x = Input.get_action_strength("ui_right") - Input.get_action_strength("ui_left")
 	if is_zero_approx(y):
@@ -107,17 +108,23 @@ func _handle_interactions() -> void:
 
 	var handled_grab_this_frame := false
 	var grab_pressed := InputManager.is_grab_pressed()
+	var active_package: Package = _held_package if _held_package != null else _predicted_held_package
+	var has_interaction_hold := active_package != null or _pending_network_hold
+	var grab_is_down := Input.is_action_pressed(String(InputManager.ACTION_GRAB))
+	if has_interaction_hold and not grab_is_down:
+		grab_pressed = false
 	if _awaiting_grab_release:
-		if not Input.is_action_pressed(String(InputManager.ACTION_GRAB)) and not grab_pressed:
+		if not grab_is_down and not grab_pressed:
 			_awaiting_grab_release = false
 		grab_pressed = false
 	if grab_pressed:
 		handled_grab_this_frame = true
-		if _held_package != null:
+		if has_interaction_hold:
 			if session != null and session.has_method("request_player_drop"):
 				if session.request_player_drop(self):
 					_held_package = null
 					_predicted_held_package = null
+					_pending_network_hold = false
 					_mark_network_request_sent()
 				else:
 					_start_cooldown()
@@ -131,11 +138,13 @@ func _handle_interactions() -> void:
 					_predicted_held_package = predicted_package
 					_held_package = predicted_package
 					_awaiting_grab_release = true
+					_pending_network_hold = true
 					_mark_network_request_sent()
 				else:
 					_predicted_held_package = null
 					_held_package = null
 					_awaiting_grab_release = false
+					_pending_network_hold = false
 					_start_cooldown()
 			else:
 				_try_grab_nearest_package()
@@ -144,11 +153,13 @@ func _handle_interactions() -> void:
 	if handled_grab_this_frame:
 		return
 
-	if _held_package != null and InputManager.is_throw_pressed():
+	var throw_pressed := InputManager.is_throw_pressed() or Input.is_action_pressed(String(InputManager.ACTION_THROW))
+	if has_interaction_hold and throw_pressed:
 		if session != null and session.has_method("request_player_throw"):
 			if session.request_player_throw(self, -basis.z.normalized() * throw_impulse_strength):
 				_held_package = null
 				_predicted_held_package = null
+				_pending_network_hold = false
 				_mark_network_request_sent()
 			else:
 				_start_cooldown()
@@ -162,6 +173,7 @@ func _try_grab_nearest_package() -> void:
 	if nearest_package != null and nearest_package.request_grab(self, _local_requester_peer_id()):
 		_held_package = nearest_package
 		_predicted_held_package = null
+		_pending_network_hold = false
 
 
 func _find_nearest_grabbable_package() -> Package:
@@ -171,9 +183,12 @@ func _find_nearest_grabbable_package() -> Package:
 
 	var nearest_package: Package = null
 	var nearest_distance_squared := grab_range * grab_range
+	var branch_root := _branch_root()
 
 	for node in tree.get_nodes_in_group("packages"):
 		if node == null or not is_instance_valid(node) or not node.is_inside_tree():
+			continue
+		if branch_root != null and not branch_root.is_ancestor_of(node):
 			continue
 		if node is not Package:
 			continue
@@ -200,6 +215,7 @@ func _drop_package() -> void:
 		_held_package.request_drop()
 	_held_package = null
 	_predicted_held_package = null
+	_pending_network_hold = false
 
 
 func _throw_package() -> void:
@@ -211,6 +227,7 @@ func _throw_package() -> void:
 		_held_package.request_drop(throw_direction * throw_impulse_strength)
 	_held_package = null
 	_predicted_held_package = null
+	_pending_network_hold = false
 
 
 func _get_session() -> Node3D:
@@ -222,7 +239,10 @@ func _get_session() -> Node3D:
 		_session_cache = null
 		return null
 
+	var branch_root := _branch_root()
 	for node in tree.get_nodes_in_group("warehouse_session"):
+		if branch_root != null and not branch_root.is_ancestor_of(node) and node != branch_root:
+			continue
 		if node is Node3D and node != null and is_instance_valid(node) and node.is_inside_tree():
 			_session_cache = node as Node3D
 			return _session_cache
@@ -236,8 +256,11 @@ func _find_held_package_for_self() -> Package:
 	if tree == null:
 		return null
 
+	var branch_root := _branch_root()
 	for node in tree.get_nodes_in_group("packages"):
 		if node == null or not is_instance_valid(node) or not node.is_inside_tree():
+			continue
+		if branch_root != null and not branch_root.is_ancestor_of(node):
 			continue
 		if node is not Package:
 			continue
@@ -301,6 +324,8 @@ func _tick_runtime_state(delta: float) -> void:
 	if is_holding_now != _last_holding_state:
 		_waiting_for_network_action = false
 		_request_timeout_left = 0.0
+	if is_holding_now:
+		_pending_network_hold = false
 	_last_holding_state = is_holding_now
 
 	if _waiting_for_network_action and is_zero_approx(_request_timeout_left):
@@ -345,11 +370,23 @@ func _compute_visible_player_count() -> int:
 	if tree == null:
 		return 0
 
+	var branch_root := _branch_root()
 	var count := 0
 	for node in tree.get_nodes_in_group("players"):
-		if node is Node3D and node.is_inside_tree():
+		if node is Node3D and node.is_inside_tree() and (branch_root == null or branch_root.is_ancestor_of(node) or node == branch_root):
 			count += 1
 	return count
+
+
+func _branch_root() -> Node:
+	var tree := get_tree()
+	if tree == null:
+		return null
+
+	var node: Node = self
+	while node.get_parent() != null and node.get_parent() != tree.root:
+		node = node.get_parent()
+	return node
 
 
 func _has_network_peer() -> bool:
@@ -421,7 +458,7 @@ func _update_runtime_status_label() -> void:
 	elif _interaction_cooldown_left > 0.0:
 		status_text = "CD %.2fs" % _interaction_cooldown_left
 		label_color = COOLDOWN_COLOR
-	elif _held_package != null:
+	elif _held_package != null or _pending_network_hold:
 		status_text = "HOLD"
 
 	if visible_players < expected_player_count:

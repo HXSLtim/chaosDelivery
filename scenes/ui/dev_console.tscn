@@ -1,0 +1,22 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://src/ui/dev_console.gd" id="1_dev_console"]
+
+[node name="DevConsole" type="CanvasLayer"]
+script = ExtResource("1_dev_console")
+
+[node name="Panel" type="PanelContainer" parent="."]
+offset_left = 640.0
+offset_top = 12.0
+offset_right = 1012.0
+offset_bottom = 220.0
+
+[node name="Content" type="VBoxContainer" parent="Panel"]
+theme_override_constants/separation = 4
+
+[node name="TitleLabel" type="Label" parent="Panel/Content"]
+text = "Developer Console"
+
+[node name="SnapshotLabel" type="Label" parent="Panel/Content"]
+text = "Developer Console\nToggle: F8"
+autowrap_mode = 3

@@ -22,11 +22,15 @@ class FakeNetworkGrabSession extends Node3D:
 
 var _tree: SceneTree
 var _failures: Array[String] = []
+var _saved_network_state: Dictionary = {}
 
 
 func run(tree: SceneTree) -> Array[String]:
 	_tree = tree
 	_failures.clear()
+	_capture_network_state()
+	_reset_input_state()
+	_reset_network_baseline()
 
 	await _test_input_manager_default_actions_keep_expected_bindings()
 	await _test_player_grab_selects_nearest_package_within_range()
@@ -36,6 +40,8 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_player_display_peer_id_maps_large_authority_to_stable_slot()
 	await _test_player_runtime_labels_use_stable_peer_slots_when_networked()
 
+	_reset_input_state()
+	_restore_network_state()
 	return _failures
 
 
@@ -126,6 +132,7 @@ func _test_same_frame_grab_and_throw_input_drops_without_throwing() -> void:
 	player._physics_process(1.0 / 60.0)
 	Input.action_release(String(InputManager.ACTION_GRAB))
 	Input.action_release(String(InputManager.ACTION_THROW))
+	await _tree.process_frame
 
 	_assert(package.holder == null, "same-frame grab/throw should drop held package")
 	_assert(package.get_state() == package.State.ON_GROUND, "same-frame grab/throw should not transition package into THROWN")
@@ -135,6 +142,9 @@ func _test_same_frame_grab_and_throw_input_drops_without_throwing() -> void:
 
 
 func _test_network_grab_prediction_allows_throw_after_timeout_before_snapshot_arrives() -> void:
+	_reset_input_state()
+	await _tree.process_frame
+
 	var network_manager := _tree.root.get_node_or_null("NetworkManager")
 	_assert(network_manager != null, "NetworkManager should exist for predicted network grab test")
 	if network_manager == null:
@@ -173,19 +183,27 @@ func _test_network_grab_prediction_allows_throw_after_timeout_before_snapshot_ar
 	await _tree.process_frame
 
 	Input.action_press(String(InputManager.ACTION_THROW))
+	var held_before_throw = player.get("_held_package")
+	var predicted_before_throw = player.get("_predicted_held_package")
+	var pending_before_throw := bool(player.get("_pending_network_hold"))
 	player._physics_process(1.0 / 60.0)
 	Input.action_release(String(InputManager.ACTION_THROW))
 
 	var held_after_throw = player.get("_held_package")
 	var predicted_after_throw = player.get("_predicted_held_package")
+	var pending_after_throw := bool(player.get("_pending_network_hold"))
 	var wait_after_throw := bool(player.get("_waiting_for_network_action"))
 	var cooldown_after_throw := float(player.get("_interaction_cooldown_left"))
 
 	_assert(
 		session.throw_requests == 1,
-		"predicted network-held package should allow throw request after timeout before authoritative snapshot arrives (held=%s predicted=%s waiting=%s cooldown=%.3f grab_requests=%d)" % [
+		"predicted network-held package should allow throw request after timeout before authoritative snapshot arrives (before_held=%s before_predicted=%s before_pending=%s after_held=%s after_predicted=%s after_pending=%s waiting=%s cooldown=%.3f grab_requests=%d)" % [
+			str(held_before_throw != null),
+			str(predicted_before_throw != null),
+			str(pending_before_throw),
 			str(held_after_throw != null),
 			str(predicted_after_throw != null),
+			str(pending_after_throw),
 			str(wait_after_throw),
 			cooldown_after_throw,
 			session.grab_requests
@@ -212,7 +230,7 @@ func _test_player_display_peer_id_maps_large_authority_to_stable_slot() -> void:
 
 	network_manager.leave_game()
 	_assert(network_manager.host_game() == OK, "setup should host a local session for player display peer slot test")
-	# Large peer ids simulate ENet-assigned remote peer identifiers rather than stable player slots.
+	# 大型 peer id 用来模拟 ENet 生成的远端连接标识，而不是稳定的玩家槽位编号。
 	network_manager.connected_peers = {
 		1: true,
 		1096654874: true
@@ -241,7 +259,7 @@ func _test_player_runtime_labels_use_stable_peer_slots_when_networked() -> void:
 	network_manager.leave_game()
 	network_manager.connected_peers = {}
 	_assert(network_manager.host_game() == OK, "setup should host a local session for networked label test")
-	# Large peer ids simulate ENet-assigned remote peer identifiers rather than stable player slots.
+	# 大型 peer id 用来模拟 ENet 生成的远端连接标识，而不是稳定的玩家槽位编号。
 	network_manager.connected_peers = {
 		1: true,
 		1096654874: true
@@ -282,6 +300,51 @@ func _make_world(name: String) -> Node3D:
 
 	_tree.root.add_child(world)
 	return world
+
+
+func _capture_network_state() -> void:
+	var network_manager := _tree.root.get_node_or_null("NetworkManager")
+	if network_manager == null:
+		return
+	_saved_network_state = {
+		"is_host": network_manager.is_host,
+		"is_connected": network_manager.is_connected,
+		"is_connecting": network_manager.is_connecting,
+		"connection_state": network_manager.connection_state,
+		"last_connection_error": int(network_manager.last_connection_error),
+		"connected_peers": network_manager.connected_peers.duplicate(true)
+	}
+
+
+func _restore_network_state() -> void:
+	var network_manager := _tree.root.get_node_or_null("NetworkManager")
+	if network_manager == null:
+		return
+	network_manager.leave_game()
+	network_manager.set("is_host", bool(_saved_network_state.get("is_host", false)))
+	network_manager.set("is_connected", bool(_saved_network_state.get("is_connected", false)))
+	network_manager.set("is_connecting", bool(_saved_network_state.get("is_connecting", false)))
+	network_manager.set("connection_state", int(_saved_network_state.get("connection_state", 0)))
+	network_manager.set("last_connection_error", int(_saved_network_state.get("last_connection_error", int(OK))))
+	network_manager.set("connected_peers", _saved_network_state.get("connected_peers", {}).duplicate(true))
+
+
+func _reset_network_baseline() -> void:
+	var network_manager := _tree.root.get_node_or_null("NetworkManager")
+	if network_manager == null:
+		return
+	network_manager.leave_game()
+	network_manager.set("is_host", false)
+	network_manager.set("is_connected", false)
+	network_manager.set("is_connecting", false)
+	network_manager.set("connection_state", 0)
+	network_manager.set("last_connection_error", int(OK))
+	network_manager.set("connected_peers", {})
+
+
+func _reset_input_state() -> void:
+	for action_name in InputManager.get_core_actions():
+		Input.action_release(String(action_name))
 
 
 func _action_has_key(action_name: StringName, keycode: Key) -> bool:

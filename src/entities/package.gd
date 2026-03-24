@@ -1,6 +1,8 @@
 extends RigidBody3D
 class_name Package
 
+const RuntimeLog := preload("res://src/utils/runtime_log.gd")
+
 signal package_state_changed(new_state: State, previous_state: State)
 signal package_holder_changed(holder: Node3D)
 
@@ -27,7 +29,9 @@ func _ready() -> void:
 	if package_id.is_empty():
 		package_id = String(name)
 	if grabbable_component == null:
-		push_warning("Package scene is missing GrabbableComponent.")
+		push_warning(RuntimeLog.warning_text("Package", "package scene missing GrabbableComponent", {
+			"node": name
+		}))
 		return
 	grabbable_component.grab_started.connect(_on_grab_started)
 	grabbable_component.grab_ended.connect(_on_grab_ended)
@@ -59,7 +63,7 @@ func _recover_stale_holder() -> void:
 		freeze = true
 		return
 
-	# Defensive recovery for stale runtime state after disconnects or duplicate RPCs.
+	# 断线或重复 RPC 后可能残留陈旧持有状态，这里统一回收。
 	if current_state == State.HELD or local_holder_valid or freeze:
 		grabbable_component.force_clear_holder(Vector3.ZERO, get_owner_peer_id_hint())
 		freeze = false
@@ -98,7 +102,7 @@ func request_drop(impulse: Vector3 = Vector3.ZERO) -> bool:
 	var dropped := bool(grabbable_component.try_drop(impulse))
 	if dropped:
 		return true
-	# Idempotent path: package already in released state should not be treated as failure.
+	# 重复 drop 不应被当作失败，保持幂等即可。
 	return holder == null and not freeze
 
 
@@ -159,7 +163,7 @@ func get_owner_peer_id_hint() -> int:
 
 func set_authority_peer_id_hint(peer_id: int) -> void:
 	authority_peer_id_hint = peer_id
-	# For networked play later, this is where we can move authority ownership.
+	# 后续如果升级更复杂的联网权限切换，可以从这里扩展。
 
 
 func _change_state(new_state: State) -> void:
@@ -223,7 +227,7 @@ func apply_network_snapshot(snapshot: Dictionary) -> void:
 			if holder_node != null:
 				grabbable_component.force_set_holder(holder_node, get_owner_peer_id_hint())
 			else:
-				# Invalid holder path in snapshot: force a clean release state.
+				# 快照里的 holder 路径无效时，强制回退到干净的落地状态。
 				grabbable_component.force_clear_holder(Vector3.ZERO, get_owner_peer_id_hint())
 				target_state = int(State.ON_GROUND)
 		else:

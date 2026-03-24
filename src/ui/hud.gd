@@ -1,5 +1,8 @@
 extends CanvasLayer
 
+const HUD_NETWORK_FORMATTER := preload("res://src/ui/hud_network_formatter.gd")
+const HUD_SIGNAL_BINDER := preload("res://src/ui/hud_signal_binder.gd")
+
 const UNKNOWN_TEXT := "N/A"
 const PROTOTYPE_CONTROLS_TEXT := "Controls: WASD Move  E Grab/Drop  F Throw"
 const NETWORK_CONTROLS_TEXT := "Network: F5 Host LAN  F6 Join localhost  F7 Leave"
@@ -91,37 +94,19 @@ func _format_network_status(network_manager: Node) -> String:
 	var connected = _read_prop(network_manager, "is_connected")
 	var host = _read_prop(network_manager, "is_host")
 	var peer_count := _peer_count(network_manager)
-	var remote_count: int = maxi(peer_count - 1, 0)
 	var connection_state := _network_link_state(network_manager)
 	var local_peer_id := _network_local_peer_id(network_manager)
-
-	if connected == null:
-		return "Unknown (Missing is_connected)"
-
-	var role := "Role Unknown"
-	if host == true:
-		role = "Host"
-	elif host == false:
-		role = "Client"
-
-	var parts: Array[String] = [role, "peers=%d" % peer_count, "remote=%d" % remote_count]
-	if local_peer_id > 0:
-		parts.append("id=%d" % local_peer_id)
-	if connection_state != "":
-		parts.append("link=%s" % connection_state)
-
 	var is_connecting = _read_prop(network_manager, "is_connecting")
-	var status := "Disconnected"
-	if is_connecting == true:
-		status = "Connecting"
-	elif connected == true:
-		status = "Connected"
-
 	var last_connection_error = _read_prop(network_manager, "last_connection_error")
-	if status == "Disconnected" and last_connection_error is int and int(last_connection_error) != OK:
-		parts.append("last_error=%s" % error_string(int(last_connection_error)))
-
-	return "%s (%s)" % [status, ", ".join(parts)]
+	return HUD_NETWORK_FORMATTER.format_status(
+		connected,
+		host,
+		peer_count,
+		local_peer_id,
+		connection_state,
+		is_connecting,
+		last_connection_error
+	)
 
 
 func _to_text(value: Variant) -> String:
@@ -162,20 +147,16 @@ func _format_network_detail(network_manager: Node) -> String:
 	var host = _read_prop(network_manager, "is_host")
 	var is_connecting = _read_prop(network_manager, "is_connecting")
 	var peer_count := _peer_count(network_manager)
-	var remote_count: int = maxi(peer_count - 1, 0)
 	var state_name := _network_connection_state_name(_read_prop(network_manager, "connection_state"))
 	var last_error = _read_prop(network_manager, "last_connection_error")
-
-	if is_connecting == true or state_name == "Connecting":
-		return "Net Detail: Connecting to host... waiting for handshake."
-	if connected == true and host == true:
-		return "Net Detail: Hosting %d remote player(s). You validate deliveries." % remote_count
-	if connected == true and host == false:
-		return "Net Detail: Client mode with %d remote player(s). Host validates deliveries." % remote_count
-
-	if last_error is int and int(last_error) != OK:
-		return "Net Detail: Disconnected (%s)." % error_string(int(last_error))
-	return "Net Detail: Offline. F5 host LAN / F6 join localhost."
+	return HUD_NETWORK_FORMATTER.format_detail(
+		connected,
+		host,
+		peer_count,
+		state_name,
+		is_connecting,
+		last_error
+	)
 
 
 func _resolve_pending_orders() -> String:
@@ -317,19 +298,7 @@ func _update_delivery_outcome_feedback(completed: int, failed: int) -> void:
 
 
 func _network_connection_state_name(state_value: Variant) -> String:
-	if state_value is int:
-		match int(state_value):
-			0:
-				return "Disconnected"
-			1:
-				return "Connecting"
-			2:
-				return "Connected"
-			_:
-				return "Unknown"
-	if state_value is String:
-		return _humanize_token(String(state_value))
-	return ""
+	return HUD_NETWORK_FORMATTER.connection_state_name(state_value)
 
 
 func _format_phase(phase_value: Variant) -> String:
@@ -353,13 +322,7 @@ func _format_phase(phase_value: Variant) -> String:
 
 
 func _humanize_token(value: String) -> String:
-	var words := value.replace("_", " ").replace("-", " ").split(" ", false)
-	var humanized_words: Array[String] = []
-	for word in words:
-		humanized_words.append(word.capitalize())
-	if humanized_words.is_empty():
-		return value
-	return " ".join(humanized_words)
+	return HUD_NETWORK_FORMATTER.humanize_token(value)
 
 
 func _resolve_order_manager() -> Node:
@@ -446,37 +409,13 @@ func _resolve_and_bind_dependencies() -> void:
 
 
 func _bind_event_bus_signals(event_bus: Node) -> void:
-	if event_bus == null:
-		return
-	_try_connect(event_bus, "phase_changed", _on_phase_changed)
-	_try_connect(event_bus, "network_state_changed", _on_network_state_changed)
-	_try_connect(event_bus, "player_joined", _on_player_roster_changed)
-	_try_connect(event_bus, "player_left", _on_player_roster_changed)
-	_try_connect(event_bus, "order_added", _on_order_event_changed)
-	_try_connect(event_bus, "order_completed", _on_order_event_changed)
-	_try_connect(event_bus, "local_player_profile_changed", _on_local_player_profile_changed)
-	_try_connect(event_bus, "session_totals_changed", _on_session_totals_changed)
-	_try_connect(event_bus, "delivery_feedback_changed", _on_delivery_feedback_changed)
+	_bound_event_bus = HUD_SIGNAL_BINDER.rebind(_bound_event_bus, event_bus, _event_bus_signal_specs())
+	_event_bus = _bound_event_bus
 
 
 func _bind_order_manager_signals(order_manager: Node) -> void:
-	if order_manager == null:
-		return
-	_try_connect(order_manager, "orders_changed", _on_order_manager_orders_changed)
-	_try_connect(order_manager, "pending_count_changed", _on_order_manager_pending_count_changed)
-	_try_connect(order_manager, "order_created", _on_order_manager_order_created)
-	_try_connect(order_manager, "order_marked_completed", _on_order_manager_order_marked_completed)
-	_try_connect(order_manager, "orders_cleared", _on_order_manager_orders_cleared)
-	_try_connect(order_manager, "order_added", _on_order_event_changed)
-	_try_connect(order_manager, "order_completed", _on_order_event_changed)
-
-
-func _try_connect(node: Node, signal_name: StringName, callable: Callable) -> void:
-	if node == null or not node.has_signal(signal_name):
-		return
-	if node.is_connected(signal_name, callable):
-		return
-	node.connect(signal_name, callable)
+	_bound_order_manager = HUD_SIGNAL_BINDER.rebind(_bound_order_manager, order_manager, _order_manager_signal_specs())
+	_order_manager = _bound_order_manager
 
 
 func _on_tree_node_added(node: Node) -> void:
@@ -579,57 +518,47 @@ func _update_pending_orders_hint(order_manager: Node) -> void:
 
 
 func _rebind_event_bus(event_bus: Node) -> void:
-	if _bound_event_bus == event_bus:
-		_event_bus = event_bus
-		return
-	_disconnect_event_bus_signals(_bound_event_bus)
-	_bound_event_bus = event_bus
-	_event_bus = event_bus
-	_bind_event_bus_signals(_bound_event_bus)
+	_bind_event_bus_signals(event_bus)
 
 
 func _rebind_order_manager(order_manager: Node) -> void:
-	if _bound_order_manager == order_manager:
-		_order_manager = order_manager
-		return
-	_disconnect_order_manager_signals(_bound_order_manager)
-	_bound_order_manager = order_manager
-	_order_manager = order_manager
-	_bind_order_manager_signals(_bound_order_manager)
+	_bind_order_manager_signals(order_manager)
 
 
 func _disconnect_event_bus_signals(event_bus: Node) -> void:
-	if event_bus == null:
-		return
-	_try_disconnect(event_bus, "phase_changed", _on_phase_changed)
-	_try_disconnect(event_bus, "network_state_changed", _on_network_state_changed)
-	_try_disconnect(event_bus, "player_joined", _on_player_roster_changed)
-	_try_disconnect(event_bus, "player_left", _on_player_roster_changed)
-	_try_disconnect(event_bus, "order_added", _on_order_event_changed)
-	_try_disconnect(event_bus, "order_completed", _on_order_event_changed)
-	_try_disconnect(event_bus, "local_player_profile_changed", _on_local_player_profile_changed)
-	_try_disconnect(event_bus, "session_totals_changed", _on_session_totals_changed)
-	_try_disconnect(event_bus, "delivery_feedback_changed", _on_delivery_feedback_changed)
+	_bound_event_bus = HUD_SIGNAL_BINDER.rebind(event_bus, null, _event_bus_signal_specs())
+	_event_bus = _bound_event_bus
 
 
 func _disconnect_order_manager_signals(order_manager: Node) -> void:
-	if order_manager == null:
-		return
-	_try_disconnect(order_manager, "orders_changed", _on_order_manager_orders_changed)
-	_try_disconnect(order_manager, "pending_count_changed", _on_order_manager_pending_count_changed)
-	_try_disconnect(order_manager, "order_created", _on_order_manager_order_created)
-	_try_disconnect(order_manager, "order_marked_completed", _on_order_manager_order_marked_completed)
-	_try_disconnect(order_manager, "orders_cleared", _on_order_manager_orders_cleared)
-	_try_disconnect(order_manager, "order_added", _on_order_event_changed)
-	_try_disconnect(order_manager, "order_completed", _on_order_event_changed)
+	_bound_order_manager = HUD_SIGNAL_BINDER.rebind(order_manager, null, _order_manager_signal_specs())
+	_order_manager = _bound_order_manager
 
 
-func _try_disconnect(node: Node, signal_name: StringName, callable: Callable) -> void:
-	if node == null or not node.has_signal(signal_name):
-		return
-	if not node.is_connected(signal_name, callable):
-		return
-	node.disconnect(signal_name, callable)
+func _event_bus_signal_specs() -> Array[Dictionary]:
+	return [
+		{"signal_name": &"phase_changed", "callable": Callable(self, "_on_phase_changed")},
+		{"signal_name": &"network_state_changed", "callable": Callable(self, "_on_network_state_changed")},
+		{"signal_name": &"player_joined", "callable": Callable(self, "_on_player_roster_changed")},
+		{"signal_name": &"player_left", "callable": Callable(self, "_on_player_roster_changed")},
+		{"signal_name": &"order_added", "callable": Callable(self, "_on_order_event_changed")},
+		{"signal_name": &"order_completed", "callable": Callable(self, "_on_order_event_changed")},
+		{"signal_name": &"local_player_profile_changed", "callable": Callable(self, "_on_local_player_profile_changed")},
+		{"signal_name": &"session_totals_changed", "callable": Callable(self, "_on_session_totals_changed")},
+		{"signal_name": &"delivery_feedback_changed", "callable": Callable(self, "_on_delivery_feedback_changed")}
+	]
+
+
+func _order_manager_signal_specs() -> Array[Dictionary]:
+	return [
+		{"signal_name": &"orders_changed", "callable": Callable(self, "_on_order_manager_orders_changed")},
+		{"signal_name": &"pending_count_changed", "callable": Callable(self, "_on_order_manager_pending_count_changed")},
+		{"signal_name": &"order_created", "callable": Callable(self, "_on_order_manager_order_created")},
+		{"signal_name": &"order_marked_completed", "callable": Callable(self, "_on_order_manager_order_marked_completed")},
+		{"signal_name": &"orders_cleared", "callable": Callable(self, "_on_order_manager_orders_cleared")},
+		{"signal_name": &"order_added", "callable": Callable(self, "_on_order_event_changed")},
+		{"signal_name": &"order_completed", "callable": Callable(self, "_on_order_event_changed")}
+	]
 
 
 func _read_delivery_feedback(game_state: Node) -> Dictionary:
