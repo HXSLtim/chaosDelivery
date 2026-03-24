@@ -50,6 +50,7 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_hud_player_label_reflects_stable_slot_profiles()
 	await _test_host_network_state_rebuilds_world_with_slot_one_profile()
 	await _test_disconnect_network_state_respawns_offline_world()
+	await _test_session_request_resolution_rejects_mismatched_sender_peer_id()
 	await _test_clear_world_detaches_nodes_before_deferred_free()
 	await _test_warehouse_camera_frames_spawn_area()
 	await _test_apply_order_state_local_filters_and_copies_snapshot()
@@ -596,6 +597,27 @@ func _test_disconnect_network_state_respawns_offline_world() -> void:
 	_assert(packages.get_child_count() == 1, "disconnect transition should respawn an offline package")
 	_assert(game_state.local_player_id == 1, "disconnect transition should restore local slot P1")
 	_assert(game_state.local_player_name == "Player 1", "disconnect transition should restore local player name")
+
+	session.queue_free()
+	await _tree.process_frame
+
+
+func _test_session_request_resolution_rejects_mismatched_sender_peer_id() -> void:
+	_set_network_disconnected_baseline()
+
+	var session = WAREHOUSE_SCENE.instantiate()
+	session.name = "SessionRequestResolution"
+	_tree.root.add_child(session)
+	await _tree.process_frame
+	await _tree.process_frame
+
+	session._spawn_player_local(2, session._player_spawn_position_for_peer(2))
+
+	var mismatched_player = session._resolve_request_player(1, 2)
+	var matching_player = session._resolve_request_player(2, 2)
+
+	_assert(mismatched_player == null, "session should reject player requests when sender peer id does not match requested player authority")
+	_assert(matching_player != null and int(matching_player.get_multiplayer_authority()) == 2, "session should resolve the matching requested player when sender peer id is valid")
 
 	session.queue_free()
 	await _tree.process_frame

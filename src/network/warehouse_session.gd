@@ -81,7 +81,7 @@ func request_player_grab(player: Node3D) -> bool:
 		return false
 
 	if NetworkManager.is_connected and not NetworkManager.is_host:
-		_request_grab.rpc_id(1)
+		_request_grab.rpc_id(1, int(player.get_multiplayer_authority()))
 		return true
 
 	return _host_try_grab(player)
@@ -92,7 +92,7 @@ func request_player_drop(player: Node3D) -> bool:
 		return false
 
 	if NetworkManager.is_connected and not NetworkManager.is_host:
-		_request_drop.rpc_id(1, Vector3.ZERO)
+		_request_drop.rpc_id(1, int(player.get_multiplayer_authority()), Vector3.ZERO)
 		return true
 
 	return _host_try_drop(player, Vector3.ZERO)
@@ -103,7 +103,7 @@ func request_player_throw(player: Node3D, impulse: Vector3) -> bool:
 		return false
 
 	if NetworkManager.is_connected and not NetworkManager.is_host:
-		_request_drop.rpc_id(1, impulse)
+		_request_drop.rpc_id(1, int(player.get_multiplayer_authority()), impulse)
 		return true
 
 	return _host_try_drop(player, impulse)
@@ -732,24 +732,36 @@ func _apply_order_state_local(orders_snapshot: Array, completed_orders: int, fai
 	GameState.set_phase(EventBus.GamePhase.WORKING)
 
 
+func _resolve_request_player(sender_peer_id: int, requested_peer_id: int) -> Node3D:
+	if sender_peer_id <= 0 or requested_peer_id <= 0:
+		return null
+	if sender_peer_id != requested_peer_id:
+		RuntimeLog.info("Session", "rejected request with mismatched peer ids", {
+			"sender_peer_id": sender_peer_id,
+			"requested_peer_id": requested_peer_id
+		})
+		return null
+	return _find_player_by_peer_id(requested_peer_id)
+
+
 @rpc("any_peer", "reliable")
-func _request_grab() -> void:
+func _request_grab(requested_peer_id: int) -> void:
 	if not NetworkManager.is_host:
 		return
 
 	var sender_id := multiplayer.get_remote_sender_id()
-	var player := _find_player_by_peer_id(sender_id)
+	var player := _resolve_request_player(sender_id, requested_peer_id)
 	if player != null:
 		_host_try_grab(player)
 
 
 @rpc("any_peer", "reliable")
-func _request_drop(impulse: Vector3) -> void:
+func _request_drop(requested_peer_id: int, impulse: Vector3) -> void:
 	if not NetworkManager.is_host:
 		return
 
 	var sender_id := multiplayer.get_remote_sender_id()
-	var player := _find_player_by_peer_id(sender_id)
+	var player := _resolve_request_player(sender_id, requested_peer_id)
 	if player != null:
 		_host_try_drop(player, impulse)
 

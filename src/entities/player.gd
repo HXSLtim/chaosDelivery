@@ -20,8 +20,8 @@ const PLAYER_COUNT_REFRESH_INTERVAL := 0.25
 
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 var _last_input: Vector2 = Vector2.ZERO
-var _held_package = null
-var _predicted_held_package = null
+var _held_package: Package = null
+var _predicted_held_package: Package = null
 var _interaction_cooldown_left: float = 0.0
 var _request_timeout_left: float = 0.0
 var _waiting_for_network_action: bool = false
@@ -29,7 +29,7 @@ var _awaiting_grab_release: bool = false
 var _last_holding_state: bool = false
 var _last_identity_cache: String = ""
 var _debug_material: StandardMaterial3D = null
-var _session_cache: Node = null
+var _session_cache: Node3D = null
 var _cached_visible_players: int = 0
 var _player_count_refresh_left: float = 0.0
 
@@ -126,7 +126,7 @@ func _handle_interactions() -> void:
 				_start_cooldown()
 		else:
 			if session != null and session.has_method("request_player_grab"):
-				var predicted_package = _find_nearest_grabbable_package()
+				var predicted_package: Package = _find_nearest_grabbable_package()
 				if session.request_player_grab(self):
 					_predicted_held_package = predicted_package
 					_held_package = predicted_package
@@ -158,22 +158,24 @@ func _handle_interactions() -> void:
 
 
 func _try_grab_nearest_package() -> void:
-	var nearest_package = _find_nearest_grabbable_package()
+	var nearest_package: Package = _find_nearest_grabbable_package()
 	if nearest_package != null and nearest_package.request_grab(self, _local_requester_peer_id()):
 		_held_package = nearest_package
 		_predicted_held_package = null
 
 
-func _find_nearest_grabbable_package():
+func _find_nearest_grabbable_package() -> Package:
 	var tree := get_tree()
 	if tree == null:
 		return null
 
-	var nearest_package = null
+	var nearest_package: Package = null
 	var nearest_distance_squared := grab_range * grab_range
 
 	for node in tree.get_nodes_in_group("packages"):
 		if node == null or not is_instance_valid(node) or not node.is_inside_tree():
+			continue
+		if node is not Package:
 			continue
 		if not node.has_method("is_held") or not node.has_method("request_grab"):
 			continue
@@ -184,7 +186,7 @@ func _find_nearest_grabbable_package():
 		if distance_squared > nearest_distance_squared:
 			continue
 
-		nearest_package = node
+		nearest_package = node as Package
 		nearest_distance_squared = distance_squared
 
 	return nearest_package
@@ -211,7 +213,7 @@ func _throw_package() -> void:
 	_predicted_held_package = null
 
 
-func _get_session() -> Node:
+func _get_session() -> Node3D:
 	if _session_cache != null and is_instance_valid(_session_cache) and _session_cache.is_inside_tree():
 		return _session_cache
 
@@ -221,15 +223,15 @@ func _get_session() -> Node:
 		return null
 
 	for node in tree.get_nodes_in_group("warehouse_session"):
-		if node != null and is_instance_valid(node) and node.is_inside_tree():
-			_session_cache = node
+		if node is Node3D and node != null and is_instance_valid(node) and node.is_inside_tree():
+			_session_cache = node as Node3D
 			return _session_cache
 
 	_session_cache = null
 	return null
 
 
-func _find_held_package_for_self():
+func _find_held_package_for_self() -> Package:
 	var tree := get_tree()
 	if tree == null:
 		return null
@@ -237,18 +239,20 @@ func _find_held_package_for_self():
 	for node in tree.get_nodes_in_group("packages"):
 		if node == null or not is_instance_valid(node) or not node.is_inside_tree():
 			continue
+		if node is not Package:
+			continue
 		if node.get("holder") == self:
-			return node
+			return node as Package
 	return null
 
 
-func _resolve_held_package():
+func _resolve_held_package() -> Package:
 	if _held_package != null and is_instance_valid(_held_package) and _held_package.is_inside_tree():
 		if _held_package.get("holder") == self:
 			_predicted_held_package = null
 			return _held_package
 
-	var resolved_package = _find_held_package_for_self()
+	var resolved_package: Package = _find_held_package_for_self()
 	if resolved_package != null:
 		_predicted_held_package = null
 		return resolved_package

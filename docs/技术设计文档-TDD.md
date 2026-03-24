@@ -1,9 +1,36 @@
 # 《混乱快递》技术设计文档 (TDD)
 
-> **版本**：v0.1  
-> **日期**：2026-03-20  
+> **版本**：v0.2  
+> **日期**：2026-03-24  
 > **引擎**：Godot 4.x  
 > **语言**：GDScript 2.0 (核心逻辑) + C# (如有性能需求)
+
+> **重要说明**
+> 本文同时包含“当前仓库已实现内容”和“后续规划草案”。
+> 如果某个模块、信号、资源类或组件在仓库中不存在，默认应视为“计划中”，不能当作已落地实现。
+
+## 0. 当前实现边界（2026-03-24）
+
+### 0.1 当前仓库已实现
+
+- AutoLoad：`EventBus`、`GameState`、`InputManager`、`NetworkManager`
+- 原型玩法：玩家移动、抓取、放下、投掷、投递区验证、最小订单闭环
+- 局域网原型：主机/客户端连接、玩家与包裹基础同步
+- HUD：玩家、订单、网络状态、投递反馈显示
+- 自动化测试：`tests/` 下的 headless 回归测试
+
+### 0.2 当前仓库未实现，但文档中仍保留为规划草案
+
+- AutoLoad：`AudioManager`、`SaveManager`
+- 组件：`FragileComponent`、`UrgentComponent`、`CatchableComponent`
+- 资源类：`PlayerProfile`、`PackageData`、`OrderData`
+- 事件/信号：`package_damaged`、`perfect_catch`、`host_migrated` 等扩展玩法/联机信号
+
+### 0.3 阅读约定
+
+- 标注“已实现”的条目可以直接对照当前代码理解
+- 未标注“已实现”的代码块默认属于目标设计，不代表仓库中已有同名脚本或接口
+- 新功能开发应以仓库实际代码为准，而不是直接以本文草案为准
 
 ---
 
@@ -40,18 +67,22 @@ chaos-delivery/
 
 ### 1.2 自动加载 (AutoLoad)
 
-| 名称 | 脚本 | 职责 |
-|------|------|------|
-| **EventBus** | `autoload/event_bus.gd` | 全局事件总线 |
-| **GameState** | `autoload/game_state.gd` | 游戏状态管理 |
-| **NetworkManager** | `autoload/network_manager.gd` | 网络连接管理 |
-| **AudioManager** | `autoload/audio_manager.gd` | 音频管理 |
-| **SaveManager** | `autoload/save_manager.gd` | 存档管理 |
-| **InputManager** | `autoload/input_manager.gd` | 输入映射管理 |
+| 名称 | 脚本 | 职责 | 状态 |
+|------|------|------|------|
+| **EventBus** | `autoload/event_bus.gd` | 全局事件总线 | 已实现 |
+| **GameState** | `autoload/game_state.gd` | 游戏状态管理 | 已实现 |
+| **NetworkManager** | `autoload/network_manager.gd` | 网络连接管理 | 已实现 |
+| **InputManager** | `autoload/input_manager.gd` | 输入映射管理 | 已实现 |
+| **AudioManager** | `autoload/audio_manager.gd` | 音频管理 | 计划中 |
+| **SaveManager** | `autoload/save_manager.gd` | 存档管理 | 计划中 |
 
 ---
 
 ## 二、核心系统实现
+
+> **阅读提示**
+> 本章中的代码块同时包含“当前接口示意”和“目标架构草案”。
+> 若与仓库当前代码不一致，请以 `src/` 下实际脚本为准。
 
 ### 2.1 事件总线 (EventBus)
 
