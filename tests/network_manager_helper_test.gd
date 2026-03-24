@@ -17,6 +17,7 @@ func run(tree: SceneTree) -> Array[String]:
 	_test_get_local_peer_slot_returns_slot_one_while_hosting()
 	_test_apply_state_updates_flags_and_clears_peers()
 	_test_clear_connection_state_respects_host_reset_parameter()
+	_test_get_connected_peer_ids_ignores_non_numeric_keys()
 
 	_restore_network_state()
 	return _failures
@@ -107,12 +108,26 @@ func _test_get_local_peer_slot_returns_slot_one_while_hosting() -> void:
 	var network_manager := _network_manager()
 	network_manager.leave_game()
 	_assert(network_manager.host_game() == OK, "setup should allow hosting for local peer slot test")
+	# Large peer ids simulate ENet-assigned remote peer identifiers rather than stable local slots.
 	network_manager.connected_peers = {
 		1: true,
 		1096654874: true
 	}
 	_assert(network_manager.get_local_peer_slot() == 1, "host should always report local slot P1 while hosting")
 	network_manager.leave_game()
+
+
+func _test_get_connected_peer_ids_ignores_non_numeric_keys() -> void:
+	var network_manager := _network_manager()
+	network_manager.connected_peers = {
+		1: true,
+		"not_a_peer": true,
+		3.0: true
+	}
+
+	var peer_ids: Array[int] = network_manager.get_connected_peer_ids()
+	peer_ids.sort()
+	_assert(peer_ids == [1, 3], "get_connected_peer_ids should ignore non-numeric peer keys")
 
 
 func _capture_network_state() -> void:

@@ -12,6 +12,7 @@ class FakeClientNetworkManager extends Node:
 	var is_connecting: bool = false
 	var connection_state: int = 2
 	var last_connection_error: int = int(OK)
+	# Large peer ids simulate ENet-assigned remote peer identifiers rather than stable local slots.
 	var connected_peers: Dictionary = {1: true, 1096654874: true}
 
 	func get_peer_slot(peer_id: int) -> int:

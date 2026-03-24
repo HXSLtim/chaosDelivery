@@ -20,6 +20,7 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_delivery_zone_uses_node_name_when_package_id_missing()
 	await _test_delivery_zone_rejects_when_order_manager_is_missing()
 	await _test_delivery_zone_rechecks_thrown_package_after_landing_inside_zone()
+	await _test_delivery_zone_reset_disconnects_pending_landing_package_callbacks()
 
 	return _failures
 
@@ -396,6 +397,61 @@ func _test_delivery_zone_rechecks_thrown_package_after_landing_inside_zone() -> 
 	_assert(
 		delivered_ids == ["pkg_thrown_retry"],
 		"delivery zone should re-check a thrown package when it lands inside the zone without requiring re-entry"
+	)
+
+	world.queue_free()
+	await _tree.process_frame
+
+
+func _test_delivery_zone_reset_disconnects_pending_landing_package_callbacks() -> void:
+	var world := _make_world("DeliveryZoneTrackedLandingReset")
+	var gameplay := Node.new()
+	gameplay.name = "Gameplay"
+	world.add_child(gameplay)
+
+	var manager = ORDER_MANAGER_SCRIPT.new()
+	gameplay.add_child(manager)
+
+	var zone = DELIVERY_ZONE_SCENE.instantiate()
+	zone.auto_seed_static_order = false
+	zone.destination_id = "A"
+	gameplay.add_child(zone)
+
+	var holder := Node3D.new()
+	holder.name = "TrackedLandingHolder"
+	world.add_child(holder)
+
+	var package = PACKAGE_SCENE.instantiate()
+	package.name = "PkgTrackedLanding"
+	package.package_id = "pkg_tracked_landing"
+	package.package_type = "normal"
+	world.add_child(package)
+	await _tree.process_frame
+
+	manager.clear_orders()
+	manager.create_order("normal", "A")
+
+	_assert(package.request_grab(holder, 1), "setup should allow tracked package grab")
+	_assert(package.request_drop(Vector3(4.0, 0.0, 0.0)), "setup should allow tracked package throw")
+	zone._on_body_entered(package)
+
+	_assert(
+		not zone._pending_landing_packages.is_empty(),
+		"delivery zone should track thrown packages that land inside the zone"
+	)
+	var tracked_entry: Dictionary = zone._pending_landing_packages.get(package.get_instance_id(), {})
+	var tracked_callable: Callable = tracked_entry.get("callable", Callable())
+	_assert(
+		package.is_connected("package_state_changed", tracked_callable),
+		"delivery zone should connect a landing callback for tracked packages"
+	)
+
+	zone.reset_delivery_tracking()
+
+	_assert(zone._pending_landing_packages.is_empty(), "delivery zone reset should clear pending landing tracking")
+	_assert(
+		not package.is_connected("package_state_changed", tracked_callable),
+		"delivery zone reset should disconnect tracked package state callbacks"
 	)
 
 	world.queue_free()

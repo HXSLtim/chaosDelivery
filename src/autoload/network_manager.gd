@@ -44,7 +44,8 @@ func get_connected_peer_count() -> int:
 func get_connected_peer_ids() -> Array[int]:
 	var peer_ids: Array[int] = []
 	for peer_id in connected_peers.keys():
-		peer_ids.append(int(peer_id))
+		if peer_id is int or peer_id is float:
+			peer_ids.append(int(peer_id))
 	return peer_ids
 
 

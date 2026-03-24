@@ -172,7 +172,10 @@ func _track_pending_landing_package(node: Node) -> void:
 		return
 
 	var state_changed_callable := Callable(self, "_on_tracked_package_state_changed").bind(node)
-	_pending_landing_packages[package_key] = state_changed_callable
+	_pending_landing_packages[package_key] = {
+		"node": node,
+		"callable": state_changed_callable
+	}
 	if not node.is_connected("package_state_changed", state_changed_callable):
 		node.connect("package_state_changed", state_changed_callable)
 
@@ -185,7 +188,8 @@ func _untrack_pending_landing_package(node: Node) -> void:
 	if not _pending_landing_packages.has(package_key):
 		return
 
-	var state_changed_callable: Callable = _pending_landing_packages.get(package_key)
+	var entry: Dictionary = _pending_landing_packages.get(package_key, {})
+	var state_changed_callable: Callable = entry.get("callable", Callable())
 	_pending_landing_packages.erase(package_key)
 	if is_instance_valid(node) and node.has_signal("package_state_changed") and node.is_connected("package_state_changed", state_changed_callable):
 		node.disconnect("package_state_changed", state_changed_callable)
@@ -193,20 +197,20 @@ func _untrack_pending_landing_package(node: Node) -> void:
 
 func _clear_pending_landing_tracking() -> void:
 	for package_key in _pending_landing_packages.keys():
-		var state_changed_callable: Callable = _pending_landing_packages.get(package_key)
-		for body in get_overlapping_bodies():
-			if body != null and is_instance_valid(body) and body.get_instance_id() == int(package_key):
-				if body.has_signal("package_state_changed") and body.is_connected("package_state_changed", state_changed_callable):
-					body.disconnect("package_state_changed", state_changed_callable)
-				break
+		var entry: Dictionary = _pending_landing_packages.get(package_key, {})
+		var body: Node = entry.get("node", null)
+		var state_changed_callable: Callable = entry.get("callable", Callable())
+		if body != null and is_instance_valid(body) and body.has_signal("package_state_changed") and body.is_connected("package_state_changed", state_changed_callable):
+			body.disconnect("package_state_changed", state_changed_callable)
 	_pending_landing_packages.clear()
 
 
-func _on_tracked_package_state_changed(new_state: int, _previous_state: int, node: Node) -> void:
+func _on_tracked_package_state_changed(new_state: Variant, _previous_state: Variant, node: Node) -> void:
 	if node == null or not is_instance_valid(node):
 		_untrack_pending_landing_package(node)
 		return
-	if new_state != 0:
+	var state_int := int(new_state) if new_state is int else int(Package.State.ON_GROUND)
+	if state_int != int(Package.State.ON_GROUND):
 		return
 
 	_untrack_pending_landing_package(node)

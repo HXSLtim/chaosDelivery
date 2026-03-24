@@ -212,6 +212,7 @@ func _test_player_display_peer_id_maps_large_authority_to_stable_slot() -> void:
 
 	network_manager.leave_game()
 	_assert(network_manager.host_game() == OK, "setup should host a local session for player display peer slot test")
+	# Large peer ids simulate ENet-assigned remote peer identifiers rather than stable player slots.
 	network_manager.connected_peers = {
 		1: true,
 		1096654874: true
@@ -240,6 +241,7 @@ func _test_player_runtime_labels_use_stable_peer_slots_when_networked() -> void:
 	network_manager.leave_game()
 	network_manager.connected_peers = {}
 	_assert(network_manager.host_game() == OK, "setup should host a local session for networked label test")
+	# Large peer ids simulate ENet-assigned remote peer identifiers rather than stable player slots.
 	network_manager.connected_peers = {
 		1: true,
 		1096654874: true

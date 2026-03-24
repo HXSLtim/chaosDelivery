@@ -12,6 +12,8 @@ enum State {
 
 @export var package_id: String = ""
 @export var package_type: String = "normal"
+@export var landing_linear_velocity_threshold_squared: float = 0.01
+@export var landing_angular_velocity_threshold_squared: float = 0.01
 
 var current_state: State = State.ON_GROUND
 var authority_peer_id_hint: int = 1
@@ -37,6 +39,7 @@ func _process(_delta: float) -> void:
 
 func _physics_process(_delta: float) -> void:
 	_recover_stale_holder()
+	_update_thrown_state()
 
 
 func _recover_stale_holder() -> void:
@@ -65,6 +68,18 @@ func _recover_stale_holder() -> void:
 			package_holder_changed.emit(holder)
 		if current_state == State.HELD:
 			_change_state(State.ON_GROUND)
+
+
+func _update_thrown_state() -> void:
+	if current_state != State.THROWN:
+		return
+	if holder != null or freeze:
+		return
+	if linear_velocity.length_squared() > landing_linear_velocity_threshold_squared:
+		return
+	if angular_velocity.length_squared() > landing_angular_velocity_threshold_squared:
+		return
+	_change_state(State.ON_GROUND)
 
 
 func request_grab(by: Node3D, requester_peer_id: int = 0) -> bool:

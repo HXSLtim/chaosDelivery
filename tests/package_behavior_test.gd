@@ -18,6 +18,7 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_stale_holder_recovers_cleanly()
 	await _test_invalid_held_snapshot_falls_back_to_ground_state()
 	await _test_grabbable_component_throttles_stale_holder_recovery_in_physics()
+	await _test_thrown_package_returns_to_ground_when_motion_stabilizes()
 
 	return _failures
 
@@ -183,6 +184,30 @@ func _test_grabbable_component_throttles_stale_holder_recovery_in_physics() -> v
 	_assert(component.holder == null, "physics recovery should clear stale holder after validation interval elapses")
 
 	holder.free()
+	world.queue_free()
+	await _tree.process_frame
+
+
+func _test_thrown_package_returns_to_ground_when_motion_stabilizes() -> void:
+	var world := _make_world("ThrownLandingStateRecovery")
+	var packages := world.get_node("Packages")
+	var holder := _make_holder("ThrowLandingHolder")
+	world.add_child(holder)
+
+	var package = PACKAGE_SCENE.instantiate()
+	packages.add_child(package)
+	await _tree.process_frame
+
+	_assert(package.request_grab(holder, 1), "setup should allow grab before throw")
+	_assert(package.request_drop(Vector3(3.0, 0.0, 0.0)), "setup should allow throw impulse")
+	_assert(package.get_state() == package.State.THROWN, "thrown package should enter THROWN state immediately after drop impulse")
+
+	package.linear_velocity = Vector3.ZERO
+	package.angular_velocity = Vector3.ZERO
+	package._physics_process(1.0 / 60.0)
+
+	_assert(package.get_state() == package.State.ON_GROUND, "thrown package should return to ON_GROUND after motion stabilizes")
+
 	world.queue_free()
 	await _tree.process_frame
 
