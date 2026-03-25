@@ -510,7 +510,8 @@ func _increment_failed_orders(amount: int) -> void:
 
 
 func _apply_player_debug_tint(player: Node, peer_id: int) -> void:
-	var visual := player.get_node_or_null("VisualRoot") as MeshInstance3D
+	var visual_root := player.get_node_or_null("VisualRoot")
+	var visual := _find_mesh_instance(visual_root)
 	if visual == null:
 		return
 
@@ -528,6 +529,18 @@ func _apply_player_debug_tint(player: Node, peer_id: int) -> void:
 		]
 		override_material.albedo_color = tint_palette[(peer_id - 1) % tint_palette.size()]
 	visual.set_surface_override_material(0, override_material)
+
+
+func _find_mesh_instance(node: Node) -> MeshInstance3D:
+	if node == null:
+		return null
+	if node is MeshInstance3D:
+		return node as MeshInstance3D
+	for child in node.get_children():
+		var visual := _find_mesh_instance(child)
+		if visual != null:
+			return visual
+	return null
 
 
 func _player_spawn_position_for_peer(peer_id: int) -> Vector3:

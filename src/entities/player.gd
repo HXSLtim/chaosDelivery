@@ -34,7 +34,7 @@ var _session_cache: Node3D = null
 var _cached_visible_players: int = 0
 var _player_count_refresh_left: float = 0.0
 
-@onready var _visual_root: MeshInstance3D = $VisualRoot
+@onready var _visual_root: Node3D = $VisualRoot
 @onready var _debug_label: Label3D = $DebugLabel
 
 
@@ -432,10 +432,11 @@ func _update_identity_visuals() -> void:
 	_debug_label.text = "P%d %s" % [peer_id, "LOCAL" if local_role else "REMOTE"]
 
 	if _debug_material == null:
-		var source_material := _visual_root.get_active_material(0)
+		var visual_mesh := _resolve_visual_mesh()
+		var source_material := visual_mesh.get_active_material(0) if visual_mesh != null else null
 		if source_material is StandardMaterial3D:
 			_debug_material = source_material.duplicate()
-			_visual_root.set_surface_override_material(0, _debug_material)
+			visual_mesh.set_surface_override_material(0, _debug_material)
 
 	if _debug_material != null:
 		_debug_material.albedo_color = tint
@@ -467,3 +468,19 @@ func _update_runtime_status_label() -> void:
 
 	_debug_label.text = "P%d %s [%s] %s" % [peer_id, role_text, status_text, roster_text]
 	_debug_label.modulate = label_color
+
+
+func _resolve_visual_mesh() -> MeshInstance3D:
+	return _find_visual_mesh(_visual_root)
+
+
+func _find_visual_mesh(node: Node) -> MeshInstance3D:
+	if node == null:
+		return null
+	if node is MeshInstance3D:
+		return node as MeshInstance3D
+	for child in node.get_children():
+		var visual_mesh := _find_visual_mesh(child)
+		if visual_mesh != null:
+			return visual_mesh
+	return null
