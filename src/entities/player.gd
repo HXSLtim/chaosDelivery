@@ -11,6 +11,9 @@ const RuntimeLog := preload("res://src/utils/runtime_log.gd")
 @export var interaction_cooldown: float = 0.12
 @export var network_request_timeout: float = 0.35  # 350ms 可覆盖局域网原型下一次 RPC 往返和一帧级抖动。
 @export var expected_player_count: int = 2
+@export var look_sensitivity: float = 0.0032
+@export_range(-89.0, 0.0, 0.1) var min_camera_pitch_degrees: float = -35.0
+@export_range(0.0, 89.0, 0.1) var max_camera_pitch_degrees: float = 50.0
 
 const LOCAL_COLOR := Color(0.329, 0.851, 0.557, 1.0)
 const REMOTE_COLOR := Color(0.847, 0.482, 0.443, 1.0)
@@ -20,6 +23,7 @@ const PLAYER_COUNT_REFRESH_INTERVAL := 0.25
 
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 var _last_input: Vector2 = Vector2.ZERO
+var _last_move_direction: Vector3 = Vector3.FORWARD
 var _held_package: Package = null
 var _predicted_held_package: Package = null
 var _interaction_cooldown_left: float = 0.0
@@ -33,8 +37,14 @@ var _debug_material: StandardMaterial3D = null
 var _session_cache: Node3D = null
 var _cached_visible_players: int = 0
 var _player_count_refresh_left: float = 0.0
+var _camera_yaw: float = 0.0
+var _camera_pitch: float = deg_to_rad(-12.0)
 
 @onready var _visual_root: Node3D = $VisualRoot
+@onready var _camera_rig: Node3D = $CameraRig
+@onready var _camera_yaw_pivot: Node3D = $CameraRig/YawPivot
+@onready var _camera_pitch_pivot: Node3D = $CameraRig/YawPivot/PitchPivot
+@onready var _player_camera: Camera3D = $CameraRig/YawPivot/PitchPivot/CameraSpringArm/PlayerCamera
 @onready var _debug_label: Label3D = $DebugLabel
 
 
@@ -47,7 +57,11 @@ func _physics_process(delta: float) -> void:
 	var input_vector := _read_move_input()
 	_last_input = input_vector
 
-	var target_velocity := Vector3(input_vector.x, 0.0, input_vector.y) * move_speed
+	var move_direction := _get_camera_relative_move_direction(input_vector)
+	if move_direction.length_squared() > 0.0001:
+		_last_move_direction = move_direction
+
+	var target_velocity := move_direction * move_speed
 	var lerp_weight := acceleration if input_vector.length() > 0.0 else deceleration
 
 	velocity.x = move_toward(velocity.x, target_velocity.x, lerp_weight * delta)
@@ -66,6 +80,8 @@ func _physics_process(delta: float) -> void:
 
 func _ready() -> void:
 	add_to_group("players")
+	_apply_camera_rotation()
+	_configure_local_camera()
 	RuntimeLog.info("Player", "ready", {
 		"node": name,
 		"authority": get_multiplayer_authority(),
@@ -91,11 +107,39 @@ func _read_move_input() -> Vector2:
 	return result
 
 
-func _update_facing(delta: float) -> void:
-	if _last_input.length() <= 0.001:
+func _unhandled_input(event: InputEvent) -> void:
+	if not _is_local_authority_safe():
 		return
 
-	var facing_target := Vector3(_last_input.x, 0.0, _last_input.y).normalized()
+	if event is InputEventMouseButton:
+		var mouse_event := event as InputEventMouseButton
+		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_LEFT:
+			_capture_mouse()
+			return
+	if event.is_action_pressed("ui_cancel"):
+		_release_mouse()
+		return
+	if event is not InputEventMouseMotion:
+		return
+	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		return
+
+	var mouse_motion := event as InputEventMouseMotion
+	_camera_yaw -= mouse_motion.relative.x * look_sensitivity
+	_camera_pitch -= mouse_motion.relative.y * look_sensitivity
+	_camera_pitch = clamp(
+		_camera_pitch,
+		deg_to_rad(min_camera_pitch_degrees),
+		deg_to_rad(max_camera_pitch_degrees)
+	)
+	_apply_camera_rotation()
+
+
+func _update_facing(delta: float) -> void:
+	if _last_move_direction.length_squared() <= 0.0001:
+		return
+
+	var facing_target := _last_move_direction.normalized()
 	var target_basis := Basis.looking_at(facing_target, Vector3.UP)
 	basis = basis.slerp(target_basis, min(delta * 10.0, 1.0))
 
@@ -205,6 +249,28 @@ func _find_nearest_grabbable_package() -> Package:
 		nearest_distance_squared = distance_squared
 
 	return nearest_package
+
+
+func _get_camera_relative_move_direction(input_vector: Vector2) -> Vector3:
+	if input_vector.length_squared() <= 0.0001:
+		return Vector3.ZERO
+
+	var basis_source := _camera_yaw_pivot.global_basis if _camera_yaw_pivot != null else global_basis
+	var forward := -basis_source.z
+	forward.y = 0.0
+	if forward.length_squared() <= 0.0001:
+		forward = -global_basis.z
+		forward.y = 0.0
+	forward = forward.normalized()
+
+	var right := basis_source.x
+	right.y = 0.0
+	if right.length_squared() <= 0.0001:
+		right = global_basis.x
+		right.y = 0.0
+	right = right.normalized()
+
+	return (right * input_vector.x - forward * input_vector.y).normalized()
 
 
 func _drop_package() -> void:
@@ -484,3 +550,33 @@ func _find_visual_mesh(node: Node) -> MeshInstance3D:
 		if visual_mesh != null:
 			return visual_mesh
 	return null
+
+
+func _configure_local_camera() -> void:
+	if _player_camera == null:
+		return
+
+	var is_local_player := _is_local_authority_safe()
+	_player_camera.current = is_local_player
+	if not is_local_player:
+		return
+	_capture_mouse()
+
+
+func _apply_camera_rotation() -> void:
+	if _camera_yaw_pivot != null:
+		_camera_yaw_pivot.rotation.y = _camera_yaw
+	if _camera_pitch_pivot != null:
+		_camera_pitch_pivot.rotation.x = _camera_pitch
+
+
+func _capture_mouse() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _release_mouse() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE

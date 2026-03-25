@@ -18,8 +18,19 @@ shape = SubResource("CapsuleShape3D_body")
 [node name="PlayerCharacterModel" parent="VisualRoot" instance=ExtResource("2_player_model")]
 transform = Transform3D(-1.15, 0, 0, 0, 1.15, 0, 0, 0, -1.15, 0, 0, 0)
 
-[node name="CameraMount" type="Marker3D" parent="."]
-position = Vector3(0, 1.6, -2.8)
+[node name="CameraRig" type="Node3D" parent="."]
+
+[node name="YawPivot" type="Node3D" parent="CameraRig"]
+position = Vector3(0, 1.4, 0)
+
+[node name="PitchPivot" type="Node3D" parent="CameraRig/YawPivot"]
+
+[node name="CameraSpringArm" type="SpringArm3D" parent="CameraRig/YawPivot/PitchPivot"]
+spring_length = 4.2
+margin = 0.2
+
+[node name="PlayerCamera" type="Camera3D" parent="CameraRig/YawPivot/PitchPivot/CameraSpringArm"]
+current = false
 
 [node name="HoldAnchor" type="Marker3D" parent="."]
 position = Vector3(0, 1, -0.75)

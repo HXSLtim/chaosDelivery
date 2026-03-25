@@ -4,7 +4,7 @@ const HUD_NETWORK_FORMATTER := preload("res://src/ui/hud_network_formatter.gd")
 const HUD_SIGNAL_BINDER := preload("res://src/ui/hud_signal_binder.gd")
 
 const UNKNOWN_TEXT := "N/A"
-const PROTOTYPE_CONTROLS_TEXT := "Controls: WASD Move  E Grab/Drop  F Throw"
+const PROTOTYPE_CONTROLS_TEXT := "Controls: Mouse Look  WASD Move  E Grab/Drop  F Throw  Esc Cursor"
 const NETWORK_CONTROLS_TEXT := "Network: F5 Host LAN  F6 Join localhost  F7 Leave"
 
 @onready var _player_label: Label = $Panel/Content/PlayerLabel

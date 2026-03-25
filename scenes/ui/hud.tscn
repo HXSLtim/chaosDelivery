@@ -42,7 +42,7 @@ text = "Orders: Pending N/A  Completed N/A  Failed N/A"
 text = "Delivery: Waiting for first result.  Next: N/A"
 
 [node name="ControlsLabel" type="Label" parent="Panel/Content"]
-text = "Controls: WASD Move  E Grab/Drop  F Throw"
+text = "Controls: Mouse Look  WASD Move  E Grab/Drop  F Throw  Esc Cursor"
 
 [node name="NetworkControlsLabel" type="Label" parent="Panel/Content"]
 text = "Network: F5 Host LAN  F6 Join localhost  F7 Leave"

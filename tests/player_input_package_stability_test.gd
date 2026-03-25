@@ -39,6 +39,9 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_network_grab_prediction_allows_throw_after_timeout_before_snapshot_arrives()
 	await _test_player_display_peer_id_maps_large_authority_to_stable_slot()
 	await _test_player_runtime_labels_use_stable_peer_slots_when_networked()
+	await _test_local_player_enables_third_person_camera()
+	await _test_remote_player_camera_stays_inactive()
+	await _test_camera_relative_movement_uses_yaw_pivot()
 
 	_reset_input_state()
 	_restore_network_state()
@@ -288,6 +291,70 @@ func _test_player_runtime_labels_use_stable_peer_slots_when_networked() -> void:
 	world.queue_free()
 	await _tree.process_frame
 	network_manager.leave_game()
+
+
+func _test_local_player_enables_third_person_camera() -> void:
+	var world := _make_world("LocalThirdPersonCamera")
+	var player = PLAYER_SCENE.instantiate()
+	player.name = "PlayerLocalCamera"
+	world.add_child(player)
+	await _tree.process_frame
+
+	var camera := player.get_node("CameraRig/YawPivot/PitchPivot/CameraSpringArm/PlayerCamera") as Camera3D
+	_assert(camera != null and camera.current, "local player should enable the third-person player camera")
+
+	world.queue_free()
+	await _tree.process_frame
+
+
+func _test_remote_player_camera_stays_inactive() -> void:
+	var network_manager := _tree.root.get_node_or_null("NetworkManager")
+	_assert(network_manager != null, "NetworkManager should exist for remote camera test")
+	if network_manager == null:
+		return
+
+	network_manager.leave_game()
+	_assert(network_manager.host_game() == OK, "setup should host a local session for remote camera test")
+	network_manager.connected_peers = {1: true, 1096654874: true}
+
+	var world := _make_world("RemoteThirdPersonCamera")
+	var remote_player = PLAYER_SCENE.instantiate()
+	remote_player.name = "1096654874"
+	remote_player.set_multiplayer_authority(1096654874)
+	world.add_child(remote_player)
+	await _tree.process_frame
+
+	var camera := remote_player.get_node("CameraRig/YawPivot/PitchPivot/CameraSpringArm/PlayerCamera") as Camera3D
+	_assert(camera != null and not camera.current, "remote player camera should stay inactive so each client keeps its own view")
+
+	world.queue_free()
+	await _tree.process_frame
+	network_manager.leave_game()
+
+
+func _test_camera_relative_movement_uses_yaw_pivot() -> void:
+	var world := _make_world("CameraRelativeMovement")
+	var player = PLAYER_SCENE.instantiate()
+	player.name = "PlayerCameraRelativeMovement"
+	world.add_child(player)
+	await _tree.process_frame
+
+	var yaw_pivot := player.get_node("CameraRig/YawPivot") as Node3D
+	_assert(yaw_pivot != null, "player scene should expose a yaw pivot for third-person movement")
+	if yaw_pivot == null:
+		world.queue_free()
+		await _tree.process_frame
+		return
+
+	yaw_pivot.rotation.y = -PI * 0.5
+	var move_direction: Vector3 = player._get_camera_relative_move_direction(Vector2(0.0, -1.0))
+	_assert(
+		move_direction.distance_to(Vector3(1.0, 0.0, 0.0)) < 0.001,
+		"forward movement should follow the camera yaw when the third-person camera turns"
+	)
+
+	world.queue_free()
+	await _tree.process_frame
 
 
 func _make_world(name: String) -> Node3D:
