@@ -30,6 +30,7 @@ spring_length = 4.2
 margin = 0.2
 
 [node name="PlayerCamera" type="Camera3D" parent="CameraRig/YawPivot/PitchPivot/CameraSpringArm"]
+position = Vector3(0.72, 0.18, 0)
 current = false
 
 [node name="HoldAnchor" type="Marker3D" parent="."]

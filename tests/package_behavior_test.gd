@@ -19,6 +19,8 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_invalid_held_snapshot_falls_back_to_ground_state()
 	await _test_grabbable_component_throttles_stale_holder_recovery_in_physics()
 	await _test_thrown_package_returns_to_ground_when_motion_stabilizes()
+	await _test_fragile_package_uses_glow_shader_override()
+	await _test_urgent_package_uses_pulse_shader_override()
 
 	return _failures
 
@@ -207,6 +209,42 @@ func _test_thrown_package_returns_to_ground_when_motion_stabilizes() -> void:
 	package._physics_process(1.0 / 60.0)
 
 	_assert(package.get_state() == package.State.ON_GROUND, "thrown package should return to ON_GROUND after motion stabilizes")
+
+	world.queue_free()
+	await _tree.process_frame
+
+
+func _test_fragile_package_uses_glow_shader_override() -> void:
+	var world := _make_world("FragilePackageShader")
+	var packages := world.get_node("Packages")
+	var package = PACKAGE_SCENE.instantiate()
+	package.package_type = "fragile"
+	packages.add_child(package)
+	await _tree.process_frame
+
+	var visual_mesh := package.get("_visual_mesh") as MeshInstance3D
+	var material := visual_mesh.get_active_material(0) if visual_mesh != null else null
+	_assert(material is ShaderMaterial, "fragile package should apply a shader material override")
+	if material is ShaderMaterial:
+		_assert(material.shader.resource_path.ends_with("fragile_glow.gdshader"), "fragile package should use fragile_glow shader")
+
+	world.queue_free()
+	await _tree.process_frame
+
+
+func _test_urgent_package_uses_pulse_shader_override() -> void:
+	var world := _make_world("UrgentPackageShader")
+	var packages := world.get_node("Packages")
+	var package = PACKAGE_SCENE.instantiate()
+	package.package_type = "urgent"
+	packages.add_child(package)
+	await _tree.process_frame
+
+	var visual_mesh := package.get("_visual_mesh") as MeshInstance3D
+	var material := visual_mesh.get_active_material(0) if visual_mesh != null else null
+	_assert(material is ShaderMaterial, "urgent package should apply a shader material override")
+	if material is ShaderMaterial:
+		_assert(material.shader.resource_path.ends_with("urgent_pulse.gdshader"), "urgent package should use urgent_pulse shader")
 
 	world.queue_free()
 	await _tree.process_frame

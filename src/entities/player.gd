@@ -8,12 +8,21 @@ const RuntimeLog := preload("res://src/utils/runtime_log.gd")
 @export var gravity_scale: float = 1.0
 @export var grab_range: float = 2.0
 @export var throw_impulse_strength: float = 4.5
+@export_range(0.05, 1.0, 0.01) var hold_move_speed_multiplier: float = 0.76
+@export_range(0.05, 1.0, 0.01) var hold_acceleration_multiplier: float = 0.72
+@export_range(0.05, 1.0, 0.01) var hold_deceleration_multiplier: float = 0.58
+@export_range(0.05, 1.0, 0.01) var air_control_multiplier: float = 0.38
+@export var turn_responsiveness: float = 10.0
+@export var hold_turn_responsiveness: float = 5.2
+@export var throw_windup_duration: float = 0.16
+@export_range(0.05, 1.0, 0.01) var throw_move_speed_multiplier: float = 0.45
 @export var interaction_cooldown: float = 0.12
 @export var network_request_timeout: float = 0.35  # 350ms 可覆盖局域网原型下一次 RPC 往返和一帧级抖动。
 @export var expected_player_count: int = 2
 @export var look_sensitivity: float = 0.0032
 @export_range(-89.0, 0.0, 0.1) var min_camera_pitch_degrees: float = -35.0
 @export_range(0.0, 89.0, 0.1) var max_camera_pitch_degrees: float = 50.0
+@export var shoulder_camera_offset: Vector3 = Vector3(0.72, 0.18, 0.0)
 
 const LOCAL_COLOR := Color(0.329, 0.851, 0.557, 1.0)
 const REMOTE_COLOR := Color(0.847, 0.482, 0.443, 1.0)
@@ -39,11 +48,15 @@ var _cached_visible_players: int = 0
 var _player_count_refresh_left: float = 0.0
 var _camera_yaw: float = 0.0
 var _camera_pitch: float = deg_to_rad(-12.0)
+var _throw_windup_left: float = 0.0
+var _queued_throw_impulse: Vector3 = Vector3.ZERO
+var _camera_drag_active: bool = false
 
 @onready var _visual_root: Node3D = $VisualRoot
 @onready var _camera_rig: Node3D = $CameraRig
 @onready var _camera_yaw_pivot: Node3D = $CameraRig/YawPivot
 @onready var _camera_pitch_pivot: Node3D = $CameraRig/YawPivot/PitchPivot
+@onready var _camera_spring_arm: SpringArm3D = $CameraRig/YawPivot/PitchPivot/CameraSpringArm
 @onready var _player_camera: Camera3D = $CameraRig/YawPivot/PitchPivot/CameraSpringArm/PlayerCamera
 @onready var _debug_label: Label3D = $DebugLabel
 
@@ -61,8 +74,10 @@ func _physics_process(delta: float) -> void:
 	if move_direction.length_squared() > 0.0001:
 		_last_move_direction = move_direction
 
-	var target_velocity := move_direction * move_speed
-	var lerp_weight := acceleration if input_vector.length() > 0.0 else deceleration
+	_update_throw_windup(delta)
+
+	var target_velocity := move_direction * _current_move_speed()
+	var lerp_weight := _current_movement_lerp_weight(input_vector)
 
 	velocity.x = move_toward(velocity.x, target_velocity.x, lerp_weight * delta)
 	velocity.z = move_toward(velocity.z, target_velocity.z, lerp_weight * delta)
@@ -80,6 +95,7 @@ func _physics_process(delta: float) -> void:
 
 func _ready() -> void:
 	add_to_group("players")
+	_apply_camera_layout()
 	_apply_camera_rotation()
 	_configure_local_camera()
 	RuntimeLog.info("Player", "ready", {
@@ -113,15 +129,19 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event is InputEventMouseButton:
 		var mouse_event := event as InputEventMouseButton
-		if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_LEFT:
-			_capture_mouse()
+		if mouse_event.button_index == MOUSE_BUTTON_RIGHT:
+			if mouse_event.pressed:
+				_start_camera_drag()
+			else:
+				_stop_camera_drag()
 			return
 	if event.is_action_pressed("ui_cancel"):
 		_release_mouse()
+		_camera_drag_active = false
 		return
 	if event is not InputEventMouseMotion:
 		return
-	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+	if not _camera_drag_active:
 		return
 
 	var mouse_motion := event as InputEventMouseMotion
@@ -141,7 +161,7 @@ func _update_facing(delta: float) -> void:
 
 	var facing_target := _last_move_direction.normalized()
 	var target_basis := Basis.looking_at(facing_target, Vector3.UP)
-	basis = basis.slerp(target_basis, min(delta * 10.0, 1.0))
+	basis = basis.slerp(target_basis, min(delta * _current_turn_responsiveness(), 1.0))
 
 
 func _handle_interactions() -> void:
@@ -199,17 +219,7 @@ func _handle_interactions() -> void:
 
 	var throw_pressed := InputManager.is_throw_pressed() or Input.is_action_pressed(String(InputManager.ACTION_THROW))
 	if has_interaction_hold and throw_pressed:
-		if session != null and session.has_method("request_player_throw"):
-			if session.request_player_throw(self, -basis.z.normalized() * throw_impulse_strength):
-				_held_package = null
-				_predicted_held_package = null
-				_pending_network_hold = false
-				_mark_network_request_sent()
-			else:
-				_start_cooldown()
-		else:
-			_throw_package()
-			_start_cooldown()
+		_start_throw_windup(-basis.z.normalized() * throw_impulse_strength)
 
 
 func _try_grab_nearest_package() -> void:
@@ -273,10 +283,40 @@ func _get_camera_relative_move_direction(input_vector: Vector2) -> Vector3:
 	return (right * input_vector.x - forward * input_vector.y).normalized()
 
 
+func _current_move_speed() -> float:
+	var speed := move_speed
+	if _has_weighted_hold_state():
+		speed *= hold_move_speed_multiplier
+	if _is_throw_winding_up():
+		speed *= throw_move_speed_multiplier
+	return speed
+
+
+func _current_movement_lerp_weight(input_vector: Vector2) -> float:
+	var is_moving := input_vector.length_squared() > 0.0001
+	var lerp_weight := acceleration if is_moving else deceleration
+	if _has_weighted_hold_state():
+		lerp_weight *= hold_acceleration_multiplier if is_moving else hold_deceleration_multiplier
+	if not is_on_floor():
+		lerp_weight *= air_control_multiplier
+	if _is_throw_winding_up():
+		lerp_weight *= 0.55
+	return lerp_weight
+
+
+func _current_turn_responsiveness() -> float:
+	if _is_throw_winding_up():
+		return hold_turn_responsiveness * 0.7
+	if _has_weighted_hold_state():
+		return hold_turn_responsiveness
+	return turn_responsiveness
+
+
 func _drop_package() -> void:
 	if _held_package == null or not is_instance_valid(_held_package):
 		return
 
+	_clear_throw_windup()
 	if _held_package.has_method("request_drop"):
 		_held_package.request_drop()
 	_held_package = null
@@ -284,13 +324,15 @@ func _drop_package() -> void:
 	_pending_network_hold = false
 
 
-func _throw_package() -> void:
+func _throw_package(impulse: Vector3 = Vector3.ZERO) -> void:
 	if _held_package == null or not is_instance_valid(_held_package):
 		return
 
-	var throw_direction := -basis.z.normalized()
+	var throw_direction := impulse
+	if throw_direction.length_squared() <= 0.0001:
+		throw_direction = -basis.z.normalized() * throw_impulse_strength
 	if _held_package.has_method("request_drop"):
-		_held_package.request_drop(throw_direction * throw_impulse_strength)
+		_held_package.request_drop(throw_direction)
 	_held_package = null
 	_predicted_held_package = null
 	_pending_network_hold = false
@@ -392,6 +434,8 @@ func _tick_runtime_state(delta: float) -> void:
 		_request_timeout_left = 0.0
 	if is_holding_now:
 		_pending_network_hold = false
+	if not is_holding_now and not _pending_network_hold and _is_throw_winding_up():
+		_clear_throw_windup()
 	_last_holding_state = is_holding_now
 
 	if _waiting_for_network_action and is_zero_approx(_request_timeout_left):
@@ -404,6 +448,8 @@ func _can_attempt_interaction() -> bool:
 	if _interaction_cooldown_left > 0.0:
 		return false
 	if _waiting_for_network_action:
+		return false
+	if _is_throw_winding_up():
 		return false
 	return true
 
@@ -522,6 +568,9 @@ func _update_runtime_status_label() -> void:
 	if _waiting_for_network_action:
 		status_text = "WAIT %.2fs" % _request_timeout_left
 		label_color = WAITING_COLOR
+	elif _is_throw_winding_up():
+		status_text = "THROW %.2fs" % _throw_windup_left
+		label_color = Color(1.0, 0.62, 0.26, 1.0)
 	elif _interaction_cooldown_left > 0.0:
 		status_text = "CD %.2fs" % _interaction_cooldown_left
 		label_color = COOLDOWN_COLOR
@@ -560,7 +609,7 @@ func _configure_local_camera() -> void:
 	_player_camera.current = is_local_player
 	if not is_local_player:
 		return
-	_capture_mouse()
+	_release_mouse()
 
 
 func _apply_camera_rotation() -> void:
@@ -580,3 +629,74 @@ func _release_mouse() -> void:
 	if DisplayServer.get_name() == "headless":
 		return
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _apply_camera_layout() -> void:
+	if _player_camera != null:
+		_player_camera.position = shoulder_camera_offset
+
+
+func _start_camera_drag() -> void:
+	_camera_drag_active = true
+	_capture_mouse()
+
+
+func _stop_camera_drag() -> void:
+	_camera_drag_active = false
+	_release_mouse()
+
+
+func _has_weighted_hold_state() -> bool:
+	return _held_package != null or _predicted_held_package != null or _pending_network_hold
+
+
+func _is_throw_winding_up() -> bool:
+	return _throw_windup_left > 0.0
+
+
+func _start_throw_windup(impulse: Vector3) -> void:
+	if impulse.length_squared() <= 0.0001:
+		return
+	if _is_throw_winding_up():
+		return
+	_queued_throw_impulse = impulse
+	if throw_windup_duration <= 0.0:
+		_execute_queued_throw()
+		return
+	_throw_windup_left = throw_windup_duration
+	_start_cooldown()
+
+
+func _update_throw_windup(delta: float) -> void:
+	if not _is_throw_winding_up():
+		return
+	_throw_windup_left = maxf(0.0, _throw_windup_left - delta)
+	if _throw_windup_left > 0.0:
+		return
+	_execute_queued_throw()
+
+
+func _execute_queued_throw() -> void:
+	if _queued_throw_impulse.length_squared() <= 0.0001:
+		_clear_throw_windup()
+		return
+
+	var session := _get_session()
+	if session != null and session.has_method("request_player_throw"):
+		if session.request_player_throw(self, _queued_throw_impulse):
+			_held_package = null
+			_predicted_held_package = null
+			_pending_network_hold = false
+			_mark_network_request_sent()
+		else:
+			_start_cooldown()
+	else:
+		_throw_package(_queued_throw_impulse)
+		_start_cooldown()
+
+	_clear_throw_windup()
+
+
+func _clear_throw_windup() -> void:
+	_throw_windup_left = 0.0
+	_queued_throw_impulse = Vector3.ZERO

@@ -42,6 +42,7 @@ func run(tree: SceneTree) -> Array[String]:
 	await _test_local_player_enables_third_person_camera()
 	await _test_remote_player_camera_stays_inactive()
 	await _test_camera_relative_movement_uses_yaw_pivot()
+	await _test_shoulder_camera_uses_right_side_offset()
 
 	_reset_input_state()
 	_restore_network_state()
@@ -352,6 +353,27 @@ func _test_camera_relative_movement_uses_yaw_pivot() -> void:
 		move_direction.distance_to(Vector3(1.0, 0.0, 0.0)) < 0.001,
 		"forward movement should follow the camera yaw when the third-person camera turns"
 	)
+
+	world.queue_free()
+	await _tree.process_frame
+
+
+func _test_shoulder_camera_uses_right_side_offset() -> void:
+	var world := _make_world("ShoulderCameraOffset")
+	var player = PLAYER_SCENE.instantiate()
+	player.name = "PlayerShoulderCameraOffset"
+	world.add_child(player)
+	await _tree.process_frame
+
+	var camera := player.get_node("CameraRig/YawPivot/PitchPivot/CameraSpringArm/PlayerCamera") as Camera3D
+	_assert(camera != null, "player scene should expose a third-person camera for shoulder offset checks")
+	if camera == null:
+		world.queue_free()
+		await _tree.process_frame
+		return
+
+	_assert(camera.position.x > 0.4, "third-person camera should be offset to the right for an over-shoulder framing")
+	_assert(camera.position.y > 0.0, "third-person camera should sit slightly above the shoulder line")
 
 	world.queue_free()
 	await _tree.process_frame

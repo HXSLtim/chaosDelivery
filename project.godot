@@ -22,3 +22,7 @@ EventBus="*res://src/autoload/event_bus.gd"
 GameState="*res://src/autoload/game_state.gd"
 InputManager="*res://src/autoload/input_manager.gd"
 NetworkManager="*res://src/autoload/network_manager.gd"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/godot_mcp/plugin.cfg")
